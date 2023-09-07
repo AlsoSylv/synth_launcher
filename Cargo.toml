@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "launcher_core",
+    "egui_fe",
+    "egui_fe/async_bridge"
+]
+
+[workspace.dependencies]
+futures = "0.3.28"
+reqwest = { version = "0.11.18", features = ["json"] }
+sha1_smol = "1.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+tokio = { version = "1.32", features = ["rt-multi-thread"], default-features = false }
+async-channel = "1.9.0"
+eframe = "0.22.0"
+launcher_core = { path = "./launcher_core" }
+async_bridge = { path = "./egui_fe/async_bridge" }
