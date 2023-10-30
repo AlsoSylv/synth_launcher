@@ -99,6 +99,8 @@ pub struct LibraryDownloads {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Classifiers {
+    #[serde(rename = "linux-x86_64")]
+    pub linux_x86_64: Option<Artifact>,
     pub natives_linux: Option<Artifact>,
     pub natives_osx: Option<Artifact>,
     pub natives_windows: Option<Artifact>,

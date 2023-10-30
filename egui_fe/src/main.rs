@@ -1,6 +1,6 @@
 use eframe::{
-    egui::{self as egui, Margin, Style},
-    epaint::{Color32, Rounding},
+    egui::{self as egui, Style},
+    epaint::Rounding,
 };
 use launcher_core::{types::VersionManifest, Error};
 
@@ -96,29 +96,24 @@ impl eframe::App for LauncherGui {
             self.data.versions_task_started = true;
         }
 
-        let centeral_frame = egui::Frame::none()
-            .fill(Color32::from_rgb(255, 255, 255))
-            .rounding(Rounding::default().at_least(30.0).at_most(30.0))
-            .inner_margin(Margin {
-                left: 10.0,
-                right: 10.0,
-                top: 10.,
-                bottom: 10.0,
-            });
-
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Color32::from_rgb(255, 255, 255)))
-            .show(ctx, |_| {
-                egui::SidePanel::left("General Panel").default_width(60.0).resizable(false).show(ctx, |ui| {
+        egui::CentralPanel::default().show(ctx, |_| {
+            egui::SidePanel::left("General Panel")
+                .default_width(60.0)
+                .resizable(false)
+                .show(ctx, |ui| {
                     if let Some(versions) = &self.data.versions {
                         egui::ComboBox::from_id_source("Version Box")
                             .width(100.0)
                             .selected_text(&versions.versions[self.data.selected_version].id)
                             .show_ui(ui, |ui| {
-                                versions.versions.iter().enumerate().for_each(
-                                    |(index, version)| {
+                                versions
+                                    .versions
+                                    .iter()
+                                    .enumerate()
+                                    .for_each(|(index, version)| {
                                         ui.style_mut().visuals.button_frame = false;
-                                        ui.style_mut().visuals.menu_rounding = Rounding::none().at_least(45.0).at_most(45.0);
+                                        ui.style_mut().visuals.menu_rounding =
+                                            Rounding::none().at_least(45.0).at_most(45.0);
 
                                         if ui.small_button(&version.id).clicked() {
                                             self.data.selected_version = index;
@@ -126,24 +121,20 @@ impl eframe::App for LauncherGui {
                                         ui.separator();
 
                                         ui.style_mut().visuals.button_frame = true;
-                                    },
-                                )
+                                    })
                             });
                     }
                 });
 
-                egui::CentralPanel::default()
-                    .frame(centeral_frame)
-                    .show(ctx, |ui| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut style = Style::default();
+                style.visuals.button_frame = true;
 
-                        let mut style = Style::default();
-                        style.visuals.button_frame = true;
+                ui.set_style(style);
 
-                        ui.set_style(style);
-
-                        if ui.button("Play").clicked() {}
-                    });
+                if ui.button("Play").clicked() {}
             });
+        });
     }
 }
 
