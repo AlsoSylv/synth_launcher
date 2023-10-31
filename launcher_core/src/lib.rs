@@ -58,15 +58,32 @@ impl AsyncLauncher {
     pub async fn get_version_json(
         &self,
         version_details: &types::Version,
+        directory: &Path,
     ) -> Result<types::VersionJson, Error> {
-        self.client
-            .get(&version_details.url)
-            .send()
-            .await
-            .map_err(Error::Reqwest)?
-            .json()
-            .await
-            .map_err(Error::Reqwest)
+        let directory = directory.join(&version_details.id);
+        let file = directory.join(version_details.id.clone() + ".json");
+        if tokio::fs::try_exists(&file).await.map_err(Error::Tokio)? {
+            let buf = tokio::fs::read(file).await.map_err(Error::Tokio)?;
+            serde_json::from_slice(&buf).map_err(Error::SerdeJson)
+        } else {
+            let buf = self
+                .client
+                .get(&version_details.url)
+                .send()
+                .await
+                .map_err(Error::Reqwest)?
+                .bytes()
+                .await
+                .map_err(Error::Reqwest)?;
+
+            tokio::fs::create_dir_all(&directory)
+                .await
+                .map_err(Error::Tokio)?;
+
+            tokio::fs::write(file, &buf).await.map_err(Error::Tokio)?;
+
+            serde_json::from_slice(&buf).map_err(Error::SerdeJson)
+        }
     }
 
     /// This expects a top level path, ie: "./Assets", and will append /indexes/ to the end to store them
@@ -97,11 +114,11 @@ impl AsyncLauncher {
                 .await
                 .map_err(Error::Tokio)?;
 
-            tokio::fs::write(directory.join(&asset_index.id), &*buf)
+            tokio::fs::write(directory.join(&asset_index.id), &buf)
                 .await
                 .map_err(Error::Tokio)?;
 
-            serde_json::from_slice(&*buf).map_err(Error::SerdeJson)
+            serde_json::from_slice(&buf).map_err(Error::SerdeJson)
         }
     }
 
@@ -145,7 +162,7 @@ impl AsyncLauncher {
 
                         let digest = sha1.digest().to_string();
 
-                        if &digest != &asset.hash {
+                        if digest != asset.hash {
                             tokio::fs::remove_file(&file_path)
                                 .await
                                 .map_err(Error::Tokio)?;
@@ -172,9 +189,10 @@ impl AsyncLauncher {
         libraries: &[types::Library],
         directory: &Path,
     ) -> Result<String, Error> {
-        let mut path = String::with_capacity(libraries.len());
+        let mut path = String::new();
 
         stream::iter(libraries.iter().filter_map(|library| {
+            path.reserve(library.name.len() + 1);
             let Some(library) = (if let Some(rules) = &library.rules {
                 rules.iter().find_map(|rule| {
                     if let Some(os) = &rule.os {
@@ -198,21 +216,33 @@ impl AsyncLauncher {
             let artifact = if let Some(artifact) = &library.downloads.artifact {
                 artifact
             } else if let Some(classifier) = &library.downloads.classifiers {
-                if let Some(win) = &classifier.natives_windows {
-                    win
-                } else if let Some(mac) = &classifier.natives_osx {
-                    mac
-                } else if let Some(lin) = &classifier.natives_linux {
-                    lin
+                let option = if cfg!(windows) {
+                    classifier.natives_windows.as_ref()
+                } else if cfg!(target_os = "macos") {
+                    classifier.natives_osx.as_ref()
+                } else if cfg!(target_os = "linux") {
+                    if cfg!(target_arch = "x86_64") {
+                        if let Some(native) = &classifier.natives_linux {
+                            Some(native)
+                        } else {
+                            classifier.linux_x86_64.as_ref()
+                        }
+                    } else {
+                        classifier.natives_linux.as_ref()
+                    }
                 } else {
-                    unreachable!("Wtf, found bad metadata")
+                    unreachable!("Found bad metadata {:?} {:?}", classifier, library)
+                };
+
+                match option {
+                    Some(art) => art,
+                    None => return None,
                 }
             } else {
-                unreachable!("Wtf, found stupid versions")
+                unreachable!("Found missing artifact")
             };
 
-            path.push_str(&library.name);
-            path.push(';');
+            path.extend([&library.name, ";"]);
 
             Some(Ok(artifact))
         }))
@@ -224,19 +254,17 @@ impl AsyncLauncher {
                 let path = directory.join(Path::new(&artifact.path));
                 let parent = path.parent().unwrap();
 
-                let url = if tokio::fs::try_exists(&path).await.map_err(Error::Tokio)? {
+                if tokio::fs::try_exists(&path).await.map_err(Error::Tokio)? {
                     let buf = tokio::fs::read(&path).await.map_err(Error::Tokio)?;
                     sha1.update(&buf);
                     if sha1.digest().to_string() == artifact.sha1 {
                         return Ok(());
                     } else {
                         tokio::fs::remove_file(&path).await.map_err(Error::Tokio)?;
-                        &artifact.url
                     }
-                } else {
-                    &artifact.url
-                };
+                }
 
+                let url = &artifact.url;
                 let response = client.get(url).send().await.map_err(Error::Reqwest)?;
                 let bytes = response.bytes().await.map_err(Error::Reqwest)?;
                 tokio::fs::create_dir_all(parent)
@@ -263,8 +291,12 @@ mod tests {
     async fn test_version_types() {
         let launcher = AsyncLauncher::new(Client::new());
         let manifest = launcher.get_version_manifest().await.unwrap();
+        let _ = fs::create_dir("./Versions");
         for version in manifest.versions.iter() {
-            if let Err(err) = launcher.get_version_json(version).await {
+            if let Err(err) = launcher
+                .get_version_json(version, &Path::new("./Versions"))
+                .await
+            {
                 println!("{}", version.id);
                 println!("{:?}", err);
             }
@@ -276,8 +308,9 @@ mod tests {
         let launcher = AsyncLauncher::new(Client::new());
         let manifest = launcher.get_version_manifest().await.unwrap();
         fs::create_dir("./Assets").unwrap();
-        if let Ok(VersionJson::Modern(version)) =
-            launcher.get_version_json(&manifest.versions[0]).await
+        if let Ok(VersionJson::Modern(version)) = launcher
+            .get_version_json(&manifest.versions[0], &Path::new("./Versions"))
+            .await
         {
             if let Ok(index) = launcher
                 .get_asset_index_json(&version.asset_index, &Path::new("./Assets"))
@@ -297,16 +330,26 @@ mod tests {
     async fn test_libs() {
         let launcher = AsyncLauncher::new(Client::new());
         let manifest = launcher.get_version_manifest().await.unwrap();
-        if let Ok(VersionJson::Modern(version)) =
-            launcher.get_version_json(&manifest.versions[0]).await
-        {
-            fs::create_dir("./Libs").unwrap();
-            let path = launcher
-                .download_libraries_and_get_path(&version.libraries, &Path::new("./Libs"))
+        fs::create_dir("./Libs").unwrap();
+        for version in &manifest.versions {
+            let libs = match launcher
+                .get_version_json(version, &Path::new("./Versions"))
+                .await
+            {
+                Ok(VersionJson::Modern(version)) => version.libraries,
+                Ok(VersionJson::Legacy(version)) => version.libraries,
+                Ok(VersionJson::Ancient(version)) => version.libraries,
+                Err(err) => panic!("How {err:?}"),
+            };
+            // println!("{:?}", version.id);
+            launcher
+                .download_libraries_and_get_path(&libs, &Path::new("./Libs"))
                 .await
                 .unwrap();
-            println!("{}", path);
+            // println!("{}", path);
+            break;
         }
+        fs::remove_dir_all("./Libs").unwrap();
     }
 
     #[tokio::test]
