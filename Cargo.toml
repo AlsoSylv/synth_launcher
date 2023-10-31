@@ -5,6 +5,9 @@ members = [
     "egui_fe/async_bridge"
 ]
 
+[profile.release]
+lto = true
+
 [workspace.dependencies]
 futures = "0.3.28"
 reqwest = { version = "0.11.18", features = ["json"] }

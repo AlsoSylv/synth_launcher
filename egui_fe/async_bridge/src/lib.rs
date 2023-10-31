@@ -1,7 +1,9 @@
+use std::pin::Pin;
+
 enum InternalMessage<M, R> {
     Message(M),
-    Callback(Box<dyn std::future::Future<Output = ()> + Unpin + Send>),
-    CallbackWithResponse(Box<dyn std::future::Future<Output = R> + Unpin + Send>),
+    Callback(Pin<Box<dyn std::future::Future<Output = ()> + Send>>),
+    CallbackWithResponse(Pin<Box<dyn std::future::Future<Output = R> + Send>>),
 }
 
 pub struct Runtime<M, R, S>
@@ -85,9 +87,9 @@ where
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         self.tx
-            .send_blocking(InternalMessage::Callback(Box::new(Box::pin(callback(
+            .send_blocking(InternalMessage::Callback(Box::pin(callback(
                 &self.state,
-            )))))
+            ))))
             .expect("There should be no way to close the channel on the other end here")
     }
 
@@ -97,9 +99,9 @@ where
         Fut: std::future::Future<Output = R> + Send + 'static,
     {
         self.tx
-            .send_blocking(InternalMessage::CallbackWithResponse(Box::new(Box::pin(
+            .send_blocking(InternalMessage::CallbackWithResponse(Box::pin(
                 callback(&self.state),
-            ))))
+            )))
             .expect("There should be no way to close the channel on the other end here")
     }
 
