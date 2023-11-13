@@ -12,7 +12,7 @@ pub struct Latest {
     pub snapshot: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Version {
     pub id: String,
@@ -23,7 +23,7 @@ pub struct Version {
     pub release_time: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Type {
     OldAlpha,
@@ -40,7 +40,26 @@ pub enum VersionJson {
     Ancient(Ancient),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl VersionJson {
+    /// Shorthand for matching and getting the ID
+    pub fn id(&self) -> &str {
+        match self {
+            VersionJson::Modern(json) => &json.id,
+            VersionJson::Legacy(json) => &json.id,
+            VersionJson::Ancient(json) => &json.id,
+        }
+    }
+
+    pub fn url(&self) -> &str {
+        match self {
+            VersionJson::Modern(json) => &json.downloads.client.url,
+            VersionJson::Legacy(json) => &json.downloads.client.url,
+            VersionJson::Ancient(json) => &json.downloads.client.url,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetIndex {
     pub id: String,
@@ -50,7 +69,7 @@ pub struct AssetIndex {
     pub url: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Library {
     pub downloads: LibraryDownloads,
     pub name: String,
@@ -59,44 +78,44 @@ pub struct Library {
     pub natives: Option<Natives>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Natives {
     pub linux: Option<String>,
     pub osx: Option<String>,
     pub windows: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Extract {
     pub exclude: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Rule {
     pub action: Action,
     pub os: Option<Os>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
     Allow,
     Disallow,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Os {
     pub name: String,
     pub version: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LibraryDownloads {
     pub artifact: Option<Artifact>,
     pub classifiers: Option<Classifiers>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Classifiers {
     #[serde(rename = "linux-x86_64")]
@@ -106,7 +125,7 @@ pub struct Classifiers {
     pub natives_windows: Option<Artifact>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Artifact {
     pub sha1: String,
     pub size: i64,
@@ -130,7 +149,9 @@ pub use legacy::Legacy;
 pub use modern::Modern;
 
 pub mod modern {
-    use super::{AssetIndex, Library};
+    use std::sync::Arc;
+
+    use super::{AssetIndex, Library, Action};
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -143,7 +164,6 @@ pub mod modern {
         pub downloads: WelcomeDownloads,
         pub id: String,
         pub java_version: JavaVersion,
-        pub libraries: Vec<Library>,
         pub logging: Logging,
         pub main_class: String,
         pub minimum_launcher_version: i64,
@@ -151,6 +171,7 @@ pub mod modern {
         pub time: String,
         #[serde(rename = "type")]
         pub welcome_type: String,
+        pub libraries: Arc<[Library]>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -183,13 +204,6 @@ pub mod modern {
     pub struct GameRule {
         pub action: Action,
         pub features: Features,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum Action {
-        Allow,
-        Disallow,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -265,6 +279,8 @@ pub mod modern {
 }
 
 pub mod legacy {
+    use std::sync::Arc;
+
     use super::{AssetIndex, Library};
     use serde::{Deserialize, Serialize};
 
@@ -277,7 +293,7 @@ pub mod legacy {
         pub downloads: WelcomeDownloads,
         pub id: String,
         pub java_version: Option<JavaVersion>,
-        pub libraries: Vec<Library>,
+        pub libraries: Arc<[Library]>,
         pub logging: Logging,
         pub main_class: String,
         pub minecraft_arguments: String,
@@ -324,6 +340,8 @@ pub mod legacy {
 }
 
 pub mod ancient {
+    use std::sync::Arc;
+
     use super::{AssetIndex, Library};
     use serde::{Deserialize, Serialize};
 
@@ -334,7 +352,7 @@ pub mod ancient {
         pub assets: String,
         pub downloads: WelcomeDownloads,
         pub id: String,
-        pub libraries: Vec<Library>,
+        pub libraries: Arc<[Library]>,
         pub main_class: String,
         pub minecraft_arguments: String,
         pub minimum_launcher_version: i64,

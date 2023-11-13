@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, sync::atomic::AtomicUsize};
 
 use futures::{stream, TryStreamExt};
 
@@ -25,6 +25,24 @@ pub enum Error {
     SerdeJson(serde_json::Error),
 }
 
+impl From<reqwest::Error> for Error {
+    fn from(value: reqwest::Error) -> Self {
+        Error::Reqwest(value)
+    }
+}
+
+impl From<tokio::io::Error> for Error {
+    fn from(value: tokio::io::Error) -> Self {
+        Error::Tokio(value)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(value: serde_json::Error) -> Self {
+        Error::SerdeJson(value)
+    }
+}
+
 impl ToString for Error {
     fn to_string(&self) -> String {
         match self {
@@ -40,21 +58,23 @@ impl AsyncLauncher {
         Self { client }
     }
 
+    /// TODO: Cache version manifest
     pub async fn get_version_manifest(&self) -> Result<types::VersionManifest, Error> {
         const VERSION_MANIFEST_URL: &str =
             "https://launchermeta.mojang.com/mc/game/version_manifest.json";
 
-        self.client
+        let val = self
+            .client
             .get(VERSION_MANIFEST_URL)
             .send()
-            .await
-            .map_err(Error::Reqwest)?
+            .await?
             .json()
-            .await
-            .map_err(Error::Reqwest)
+            .await?;
+
+        Ok(val)
     }
 
-    // Todo cache version json
+    /// This expects a path such as `./Versions`
     pub async fn get_version_json(
         &self,
         version_details: &types::Version,
@@ -62,27 +82,25 @@ impl AsyncLauncher {
     ) -> Result<types::VersionJson, Error> {
         let directory = directory.join(&version_details.id);
         let file = directory.join(version_details.id.clone() + ".json");
-        if tokio::fs::try_exists(&file).await.map_err(Error::Tokio)? {
-            let buf = tokio::fs::read(file).await.map_err(Error::Tokio)?;
-            serde_json::from_slice(&buf).map_err(Error::SerdeJson)
+        if tokio::fs::try_exists(&file).await? {
+            let buf = tokio::fs::read(file).await?;
+            let val = serde_json::from_slice(&buf)?;
+            Ok(val)
         } else {
             let buf = self
                 .client
                 .get(&version_details.url)
                 .send()
-                .await
-                .map_err(Error::Reqwest)?
+                .await?
                 .bytes()
-                .await
-                .map_err(Error::Reqwest)?;
+                .await?;
 
-            tokio::fs::create_dir_all(&directory)
-                .await
-                .map_err(Error::Tokio)?;
+            tokio::fs::create_dir_all(&directory).await?;
 
-            tokio::fs::write(file, &buf).await.map_err(Error::Tokio)?;
+            tokio::fs::write(file, &buf).await?;
 
-            serde_json::from_slice(&buf).map_err(Error::SerdeJson)
+            let val = serde_json::from_slice(&buf)?;
+            Ok(val)
         }
     }
 
@@ -93,32 +111,27 @@ impl AsyncLauncher {
         directory: &Path,
     ) -> Result<types::AssetIndexJson, Error> {
         let directory = directory.join("indexes");
-        if tokio::fs::try_exists(&directory)
-            .await
-            .map_err(Error::Tokio)?
-        {
-            let buf = tokio::fs::read(directory).await.map_err(Error::Tokio)?;
-            serde_json::from_slice(&buf).map_err(Error::SerdeJson)
+        let file = directory.join(&asset_index.id);
+        if tokio::fs::try_exists(&file).await? {
+            let buf = tokio::fs::read(&file).await?;
+            let val = serde_json::from_slice(&buf)?;
+            Ok(val)
         } else {
             let buf = self
                 .client
                 .get(&asset_index.url)
                 .send()
-                .await
-                .map_err(Error::Reqwest)?
+                .await?
                 .bytes()
-                .await
-                .map_err(Error::Reqwest)?;
+                .await?;
+            if !tokio::fs::try_exists(&directory).await? {
+                tokio::fs::create_dir_all(&directory).await?;
+            }
 
-            tokio::fs::create_dir(&directory)
-                .await
-                .map_err(Error::Tokio)?;
+            tokio::fs::write(directory.join(&asset_index.id), &buf).await?;
 
-            tokio::fs::write(directory.join(&asset_index.id), &buf)
-                .await
-                .map_err(Error::Tokio)?;
-
-            serde_json::from_slice(&buf).map_err(Error::SerdeJson)
+            let val = serde_json::from_slice(&buf)?;
+            Ok(val)
         }
     }
 
@@ -127,17 +140,19 @@ impl AsyncLauncher {
         &self,
         asset_index: &types::AssetIndexJson,
         directory: &Path,
+        total: &AtomicUsize,
+        finished: &AtomicUsize,
     ) -> Result<(), Error> {
         const ASSET_BASE_URL: &str = "https://resources.download.minecraft.net";
 
+        total.store(
+            asset_index.objects.len(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         let object_path = directory.join("Objects");
-        if !tokio::fs::try_exists(&object_path)
-            .await
-            .map_err(Error::Tokio)?
-        {
-            tokio::fs::create_dir(&object_path)
-                .await
-                .map_err(Error::Tokio)?;
+        if !tokio::fs::try_exists(&object_path).await? {
+            tokio::fs::create_dir(&object_path).await?;
         }
 
         stream::iter(asset_index.objects.values().map(Ok))
@@ -150,35 +165,33 @@ impl AsyncLauncher {
                     let dir_path = directory.join(first_two);
                     let file_path = dir_path.join(&asset.hash);
 
-                    if !dir_path.try_exists().map_err(Error::Tokio)? {
-                        tokio::fs::create_dir(dir_path)
-                            .await
-                            .map_err(Error::Tokio)?;
+                    if !dir_path.try_exists()? {
+                        tokio::fs::create_dir(dir_path).await?;
                     }
 
-                    let url = if file_path.try_exists().map_err(Error::Tokio)? {
-                        let buf = tokio::fs::read(&file_path).await.map_err(Error::Tokio)?;
+                    let url = if file_path.try_exists()? {
+                        let buf = tokio::fs::read(&file_path).await?;
                         sha1.update(&buf);
 
                         let digest = sha1.digest().to_string();
 
                         if digest != asset.hash {
-                            tokio::fs::remove_file(&file_path)
-                                .await
-                                .map_err(Error::Tokio)?;
+                            tokio::fs::remove_file(&file_path).await?;
                             format!("{}/{}/{}/", ASSET_BASE_URL, first_two, &asset.hash)
                         } else {
+                            finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             return Ok(());
                         }
                     } else {
                         format!("{}/{}/{}", ASSET_BASE_URL, first_two, &asset.hash)
                     };
 
-                    let response = client.get(url).send().await.map_err(Error::Reqwest)?;
-                    let bytes = response.bytes().await.map_err(Error::Reqwest)?;
-                    tokio::fs::write(&file_path, bytes)
-                        .await
-                        .map_err(Error::Tokio)
+                    let response = client.get(url).send().await?;
+                    let bytes = response.bytes().await?;
+                    tokio::fs::write(&file_path, bytes).await?;
+
+                    finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Ok(())
                 }
             })
             .await
@@ -188,51 +201,58 @@ impl AsyncLauncher {
         &self,
         libraries: &[types::Library],
         directory: &Path,
+        total: &AtomicUsize,
+        finished: &AtomicUsize,
     ) -> Result<String, Error> {
         let mut path = String::new();
 
         stream::iter(libraries.iter().filter_map(|library| {
-            path.reserve(library.name.len() + 1);
-            let Some(library) = (if let Some(rules) = &library.rules {
-                rules.iter().find_map(|rule| {
+            let dir = directory.to_str().unwrap();
+            path.reserve(library.name.len() + dir.len() + 2);
+            let mut lib: Option<&types::Library> = None;
+            if let Some(rules) = &library.rules {
+                for rule in rules {
                     if let Some(os) = &rule.os {
                         if os.name == OS && rule.action == types::Action::Allow {
-                            Some(library)
+                            lib = Some(library);
                         } else {
-                            None
+                            return None;
                         }
                     } else if rule.action == types::Action::Allow {
-                        Some(library)
+                        lib = Some(library);
                     } else {
-                        None
+                        return None;
                     }
-                })
+                }
             } else {
-                Some(library)
-            }) else {
+                lib = Some(library);
+            }
+
+            // This garuntees that it is intilized
+            // Because if it's none here then there
+            // Is no library to check to begin with
+            let Some(lib) = lib else {
                 return None;
             };
 
-            let artifact = if let Some(artifact) = &library.downloads.artifact {
+            let artifact = if let Some(artifact) = &lib.downloads.artifact {
                 artifact
             } else if let Some(classifier) = &library.downloads.classifiers {
-                let option = if cfg!(windows) {
-                    classifier.natives_windows.as_ref()
-                } else if cfg!(target_os = "macos") {
-                    classifier.natives_osx.as_ref()
-                } else if cfg!(target_os = "linux") {
-                    if cfg!(target_arch = "x86_64") {
-                        if let Some(native) = &classifier.natives_linux {
-                            Some(native)
-                        } else {
-                            classifier.linux_x86_64.as_ref()
-                        }
-                    } else {
-                        classifier.natives_linux.as_ref()
-                    }
+                #[cfg(target_os = "windows")]
+                let option = classifier.natives_windows.as_ref();
+
+                #[cfg(target_os = "macos")]
+                let option = classifier.natives_osx.as_ref();
+
+                #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+                let option = if classifier.natives_linux.is_some() {
+                    classifier.natives_linux.as_ref()
                 } else {
-                    unreachable!("Found bad metadata {:?} {:?}", classifier, library)
+                    classifier.linux_x86_64.as_ref()
                 };
+
+                #[cfg(all(target_os = "linux", not(target_arch = "x86_64")))]
+                let option = classifier.natives_linux.as_ref();
 
                 match option {
                     Some(art) => art,
@@ -242,46 +262,152 @@ impl AsyncLauncher {
                 unreachable!("Found missing artifact")
             };
 
-            path.extend([&library.name, ";"]);
+            path.extend([dir, "/", &artifact.path, ":"]);
 
-            Some(Ok(artifact))
+            total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            Some(Ok::<&types::Artifact, Error>(artifact))
         }))
         .try_for_each_concurrent(16, |artifact| {
             let client = self.client.clone();
             let mut sha1 = sha1_smol::Sha1::new();
-            let directory = &directory;
+            let path = directory.join(Path::new(&artifact.path));
+            let url = &artifact.url;
+            let finished = &finished;
+
             async move {
-                let path = directory.join(Path::new(&artifact.path));
                 let parent = path.parent().unwrap();
 
-                if tokio::fs::try_exists(&path).await.map_err(Error::Tokio)? {
-                    let buf = tokio::fs::read(&path).await.map_err(Error::Tokio)?;
+                if tokio::fs::try_exists(&path).await? {
+                    let buf = tokio::fs::read(&path).await?;
                     sha1.update(&buf);
                     if sha1.digest().to_string() == artifact.sha1 {
                         return Ok(());
                     } else {
-                        tokio::fs::remove_file(&path).await.map_err(Error::Tokio)?;
+                        tokio::fs::remove_file(&path).await?;
                     }
                 }
 
-                let url = &artifact.url;
-                let response = client.get(url).send().await.map_err(Error::Reqwest)?;
-                let bytes = response.bytes().await.map_err(Error::Reqwest)?;
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(Error::Tokio)?;
-                tokio::fs::write(path, bytes).await.map_err(Error::Tokio)
+                let response = client.get(url).send().await?;
+                let bytes = response.bytes().await?;
+                tokio::fs::create_dir_all(parent).await?;
+                tokio::fs::write(path, bytes).await?;
+                finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
             }
         })
         .await?;
 
         Ok(path)
     }
+
+    pub async fn download_jar(
+        &self,
+        version_details: &types::VersionJson,
+        directory: &Path,
+    ) -> Result<String, Error> {
+        let id = version_details.id();
+        let url = version_details.url();
+        let folder = directory.join(id);
+
+        let file = folder.join(format!("{id}.jar"));
+        let str = file.to_str().unwrap().to_string();
+
+        let jar = self.client.get(url).send().await?;
+        let buf = jar.bytes().await?;
+        tokio::fs::write(file, buf).await?;
+
+        Ok(str)
+    }
+
+    pub fn launch_game(
+        json: &types::VersionJson,
+        directory: &Path,
+        asset_root: &Path,
+
+        player_name: &str,
+        auth_uuid: &str,
+        access_token: &str,
+        client_id: &str,
+        auth_xuid: &str,
+
+        native_directory: &Path,
+        launcher_name: &str,
+        launcher_version: &str,
+        class_path: &str,
+    ) {
+        let mut process = std::process::Command::new("java");
+        match json {
+            types::VersionJson::Modern(json) => {
+                let args = &json.arguments;
+
+                args.jvm.iter().for_each(|arg| match arg {
+                    types::modern::JvmElement::JvmClass(class) => {
+                        class.rules.iter().for_each(|rule| {
+                            if let Some(os) = &rule.os.name {
+                                if rule.action == types::Action::Allow && os == OS {
+                                    match &class.value {
+                                        types::modern::Value::String(arg) => {
+                                            process.arg(arg);
+                                        }
+                                        types::modern::Value::StringArray(args) => {
+                                            for arg in args {
+                                                process.arg(arg);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    types::modern::JvmElement::String(arg) => {
+                        let arg = arg
+                            .replace("${natives_directory}", &native_directory.to_string_lossy())
+                            .replace("${launcher_name}", launcher_name)
+                            .replace("${launcher_version}", launcher_version)
+                            .replace("${classpath}", class_path);
+
+                        process.arg(arg);
+                    }
+                });
+
+                process.arg(&json.main_class);
+
+                args.game.iter().for_each(|arg| match arg {
+                    types::modern::GameElement::GameClass(_) => {
+                        // This is left empty, as I have not setup support for any of the features here
+                    }
+                    types::modern::GameElement::String(arg) => {
+                        let arg = arg
+                            .replace("${auth_player_name}", player_name)
+                            .replace("${version_name}", &json.id)
+                            .replace("${game_directory}", &directory.to_string_lossy())
+                            .replace("${assets_root}", &asset_root.to_string_lossy())
+                            .replace("${assets_index_name}", &json.asset_index.id)
+                            .replace("${auth_uuid}", auth_uuid)
+                            .replace("${auth_access_token}", access_token)
+                            .replace("${clientid}", client_id)
+                            .replace("${auth_xuid}", auth_xuid)
+                            .replace("${user_type}", "demo")
+                            .replace("${version_type}", &json.welcome_type);
+
+                        process.arg(arg);
+                    }
+                });
+            }
+            types::VersionJson::Legacy(json) => todo!(),
+            types::VersionJson::Ancient(json) => todo!(),
+        };
+
+        println!("{:?}", process.get_args());
+
+        process.spawn().unwrap();
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::{fs, path::Path, sync::atomic::AtomicUsize};
 
     use reqwest::Client;
 
@@ -317,7 +443,12 @@ mod tests {
                 .await
             {
                 if let Err(err) = launcher
-                    .download_and_store_asset_index(&index, &Path::new("./Assets"))
+                    .download_and_store_asset_index(
+                        &index,
+                        &Path::new("./Assets"),
+                        &AtomicUsize::new(0),
+                        &AtomicUsize::new(0),
+                    )
                     .await
                 {
                     panic!("{:?}", err)
@@ -343,7 +474,12 @@ mod tests {
             };
             // println!("{:?}", version.id);
             launcher
-                .download_libraries_and_get_path(&libs, &Path::new("./Libs"))
+                .download_libraries_and_get_path(
+                    &libs,
+                    &Path::new("./Libs"),
+                    &AtomicUsize::new(0),
+                    &AtomicUsize::new(0),
+                )
                 .await
                 .unwrap();
             // println!("{}", path);
