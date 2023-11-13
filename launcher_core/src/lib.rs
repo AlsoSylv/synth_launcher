@@ -59,18 +59,52 @@ impl AsyncLauncher {
     }
 
     /// TODO: Cache version manifest
-    pub async fn get_version_manifest(&self) -> Result<types::VersionManifest, Error> {
+    pub async fn get_version_manifest(
+        &self,
+        directory: &Path,
+    ) -> Result<types::VersionManifest, Error> {
         const VERSION_MANIFEST_URL: &str =
             "https://launchermeta.mojang.com/mc/game/version_manifest.json";
 
-        let val = self
+        let file = directory.join("version_manifest.json");
+
+        if tokio::fs::try_exists(&file).await? {
+            let metadata = tokio::fs::metadata(&file).await?;
+            let dt_mod = time::OffsetDateTime::from(metadata.modified()?);
+
+            let response = self.client.head(VERSION_MANIFEST_URL).send().await?;
+            let cdn_modified = response.headers()[reqwest::header::LAST_MODIFIED]
+                .to_str()
+                .unwrap();
+            let dt_cdn = time::OffsetDateTime::parse(
+                cdn_modified,
+                &time::format_description::well_known::Rfc2822,
+            )
+            .unwrap();
+
+            if dt_cdn < dt_mod {
+                let bytes = self
+                    .client
+                    .get(VERSION_MANIFEST_URL)
+                    .send()
+                    .await?
+                    .bytes()
+                    .await?;
+                tokio::fs::write(file, &bytes).await?;
+                let val = serde_json::from_slice(&bytes)?;
+                return Ok(val);
+            }
+        }
+
+        let bytes = self
             .client
             .get(VERSION_MANIFEST_URL)
             .send()
             .await?
-            .json()
+            .bytes()
             .await?;
-
+        tokio::fs::write(file, &bytes).await?;
+        let val = serde_json::from_slice(&bytes)?;
         Ok(val)
     }
 
@@ -313,96 +347,105 @@ impl AsyncLauncher {
         let file = folder.join(format!("{id}.jar"));
         let str = file.to_str().unwrap().to_string();
 
+        if tokio::fs::try_exists(&file).await? {
+            let mut hasher = sha1_smol::Sha1::new();
+            let buf = tokio::fs::read(&file).await?;
+            hasher.update(&buf);
+            if hasher.digest().to_string() == version_details.sha1() {
+                return Ok(str);
+            }
+        }
+
         let jar = self.client.get(url).send().await?;
         let buf = jar.bytes().await?;
         tokio::fs::write(file, buf).await?;
 
         Ok(str)
     }
+}
 
-    pub fn launch_game(
-        json: &types::VersionJson,
-        directory: &Path,
-        asset_root: &Path,
+pub fn launch_game(
+    json: &types::VersionJson,
+    directory: &Path,
+    asset_root: &Path,
 
-        player_name: &str,
-        auth_uuid: &str,
-        access_token: &str,
-        client_id: &str,
-        auth_xuid: &str,
+    player_name: &str,
+    auth_uuid: &str,
+    access_token: &str,
+    client_id: &str,
+    auth_xuid: &str,
 
-        native_directory: &Path,
-        launcher_name: &str,
-        launcher_version: &str,
-        class_path: &str,
-    ) {
-        let mut process = std::process::Command::new("java");
-        match json {
-            types::VersionJson::Modern(json) => {
-                let args = &json.arguments;
+    native_directory: &Path,
+    launcher_name: &str,
+    launcher_version: &str,
+    class_path: &str,
+) {
+    let mut process = std::process::Command::new("java");
+    match json {
+        types::VersionJson::Modern(json) => {
+            let args = &json.arguments;
 
-                args.jvm.iter().for_each(|arg| match arg {
-                    types::modern::JvmElement::JvmClass(class) => {
-                        class.rules.iter().for_each(|rule| {
-                            if let Some(os) = &rule.os.name {
-                                if rule.action == types::Action::Allow && os == OS {
-                                    match &class.value {
-                                        types::modern::Value::String(arg) => {
+            args.jvm.iter().for_each(|arg| match arg {
+                types::modern::JvmElement::JvmClass(class) => {
+                    class.rules.iter().for_each(|rule| {
+                        if let Some(os) = &rule.os.name {
+                            if rule.action == types::Action::Allow && os == OS {
+                                match &class.value {
+                                    types::modern::Value::String(arg) => {
+                                        process.arg(arg);
+                                    }
+                                    types::modern::Value::StringArray(args) => {
+                                        for arg in args {
                                             process.arg(arg);
-                                        }
-                                        types::modern::Value::StringArray(args) => {
-                                            for arg in args {
-                                                process.arg(arg);
-                                            }
                                         }
                                     }
                                 }
                             }
-                        });
-                    }
-                    types::modern::JvmElement::String(arg) => {
-                        let arg = arg
-                            .replace("${natives_directory}", &native_directory.to_string_lossy())
-                            .replace("${launcher_name}", launcher_name)
-                            .replace("${launcher_version}", launcher_version)
-                            .replace("${classpath}", class_path);
+                        }
+                    });
+                }
+                types::modern::JvmElement::String(arg) => {
+                    let arg = arg
+                        .replace("${natives_directory}", &native_directory.to_string_lossy())
+                        .replace("${launcher_name}", launcher_name)
+                        .replace("${launcher_version}", launcher_version)
+                        .replace("${classpath}", class_path);
 
-                        process.arg(arg);
-                    }
-                });
+                    process.arg(arg);
+                }
+            });
 
-                process.arg(&json.main_class);
+            process.arg(&json.main_class);
 
-                args.game.iter().for_each(|arg| match arg {
-                    types::modern::GameElement::GameClass(_) => {
-                        // This is left empty, as I have not setup support for any of the features here
-                    }
-                    types::modern::GameElement::String(arg) => {
-                        let arg = arg
-                            .replace("${auth_player_name}", player_name)
-                            .replace("${version_name}", &json.id)
-                            .replace("${game_directory}", &directory.to_string_lossy())
-                            .replace("${assets_root}", &asset_root.to_string_lossy())
-                            .replace("${assets_index_name}", &json.asset_index.id)
-                            .replace("${auth_uuid}", auth_uuid)
-                            .replace("${auth_access_token}", access_token)
-                            .replace("${clientid}", client_id)
-                            .replace("${auth_xuid}", auth_xuid)
-                            .replace("${user_type}", "demo")
-                            .replace("${version_type}", &json.welcome_type);
+            args.game.iter().for_each(|arg| match arg {
+                types::modern::GameElement::GameClass(_) => {
+                    // This is left empty, as I have not setup support for any of the features here
+                }
+                types::modern::GameElement::String(arg) => {
+                    let arg = arg
+                        .replace("${auth_player_name}", player_name)
+                        .replace("${version_name}", &json.id)
+                        .replace("${game_directory}", &directory.to_string_lossy())
+                        .replace("${assets_root}", &asset_root.to_string_lossy())
+                        .replace("${assets_index_name}", &json.asset_index.id)
+                        .replace("${auth_uuid}", auth_uuid)
+                        .replace("${auth_access_token}", access_token)
+                        .replace("${clientid}", client_id)
+                        .replace("${auth_xuid}", auth_xuid)
+                        .replace("${user_type}", "demo")
+                        .replace("${version_type}", &json.welcome_type);
 
-                        process.arg(arg);
-                    }
-                });
-            }
-            types::VersionJson::Legacy(json) => todo!(),
-            types::VersionJson::Ancient(json) => todo!(),
-        };
+                    process.arg(arg);
+                }
+            });
+        }
+        types::VersionJson::Legacy(json) => {}
+        types::VersionJson::Ancient(json) => todo!(),
+    };
 
-        println!("{:?}", process.get_args());
+    println!("{:?}", process.get_args());
 
-        process.spawn().unwrap();
-    }
+    process.spawn().unwrap();
 }
 
 #[cfg(test)]
@@ -416,7 +459,10 @@ mod tests {
     #[tokio::test]
     async fn test_version_types() {
         let launcher = AsyncLauncher::new(Client::new());
-        let manifest = launcher.get_version_manifest().await.unwrap();
+        let manifest = launcher
+            .get_version_manifest(Path::new("./Versions"))
+            .await
+            .unwrap();
         let _ = fs::create_dir("./Versions");
         for version in manifest.versions.iter() {
             if let Err(err) = launcher
@@ -432,7 +478,10 @@ mod tests {
     #[tokio::test]
     async fn test_assets() {
         let launcher = AsyncLauncher::new(Client::new());
-        let manifest = launcher.get_version_manifest().await.unwrap();
+        let manifest = launcher
+            .get_version_manifest(Path::new("./Versions"))
+            .await
+            .unwrap();
         fs::create_dir("./Assets").unwrap();
         if let Ok(VersionJson::Modern(version)) = launcher
             .get_version_json(&manifest.versions[0], &Path::new("./Versions"))
@@ -460,7 +509,10 @@ mod tests {
     #[tokio::test]
     async fn test_libs() {
         let launcher = AsyncLauncher::new(Client::new());
-        let manifest = launcher.get_version_manifest().await.unwrap();
+        let manifest = launcher
+            .get_version_manifest(Path::new("./Versions"))
+            .await
+            .unwrap();
         fs::create_dir("./Libs").unwrap();
         for version in &manifest.versions {
             let libs = match launcher

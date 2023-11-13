@@ -57,6 +57,14 @@ impl VersionJson {
             VersionJson::Ancient(json) => &json.downloads.client.url,
         }
     }
+
+    pub fn sha1(&self) -> &str {
+        match self {
+            VersionJson::Modern(json) => &json.downloads.client.sha1,
+            VersionJson::Legacy(json) => &json.downloads.client.sha1,
+            VersionJson::Ancient(json) => &json.downloads.client.sha1,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -151,7 +159,7 @@ pub use modern::Modern;
 pub mod modern {
     use std::sync::Arc;
 
-    use super::{AssetIndex, Library, Action};
+    use super::{Action, AssetIndex, Library};
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize)]
