@@ -1,6 +1,7 @@
 use std::{path::Path, sync::atomic::AtomicUsize};
 
 use futures::{stream, TryStreamExt};
+use time::format_description::well_known::Rfc2822;
 
 #[cfg(windows)]
 const OS: &str = "windows";
@@ -12,6 +13,7 @@ const OS: &str = "osx";
 const OS: &str = "linux";
 
 pub mod types;
+pub mod account;
 
 #[derive(Clone)]
 pub struct AsyncLauncher {
@@ -76,22 +78,11 @@ impl AsyncLauncher {
             let cdn_modified = response.headers()[reqwest::header::LAST_MODIFIED]
                 .to_str()
                 .unwrap();
-            let dt_cdn = time::OffsetDateTime::parse(
-                cdn_modified,
-                &time::format_description::well_known::Rfc2822,
-            )
-            .unwrap();
+            let dt_cdn = time::OffsetDateTime::parse(cdn_modified, &Rfc2822).unwrap();
 
             if dt_cdn < dt_mod {
-                let bytes = self
-                    .client
-                    .get(VERSION_MANIFEST_URL)
-                    .send()
-                    .await?
-                    .bytes()
-                    .await?;
-                tokio::fs::write(file, &bytes).await?;
-                let val = serde_json::from_slice(&bytes)?;
+                let buf = tokio::fs::read(file).await?;
+                let val = serde_json::from_slice(&buf)?;
                 return Ok(val);
             }
         }
@@ -364,8 +355,8 @@ impl AsyncLauncher {
     }
 }
 
-pub fn launch_game(
-    json: &types::VersionJson,
+pub fn launch_modern_version(
+    json: &types::Modern,
     directory: &Path,
     asset_root: &Path,
 
@@ -381,67 +372,61 @@ pub fn launch_game(
     class_path: &str,
 ) {
     let mut process = std::process::Command::new("java");
-    match json {
-        types::VersionJson::Modern(json) => {
-            let args = &json.arguments;
+    let args = &json.arguments;
 
-            args.jvm.iter().for_each(|arg| match arg {
-                types::modern::JvmElement::JvmClass(class) => {
-                    class.rules.iter().for_each(|rule| {
-                        if let Some(os) = &rule.os.name {
-                            if rule.action == types::Action::Allow && os == OS {
-                                match &class.value {
-                                    types::modern::Value::String(arg) => {
-                                        process.arg(arg);
-                                    }
-                                    types::modern::Value::StringArray(args) => {
-                                        for arg in args {
-                                            process.arg(arg);
-                                        }
-                                    }
+    args.jvm.iter().for_each(|arg| match arg {
+        types::modern::JvmElement::JvmClass(class) => {
+            class.rules.iter().for_each(|rule| {
+                if let Some(os) = &rule.os.name {
+                    if rule.action == types::Action::Allow && os == OS {
+                        match &class.value {
+                            types::modern::Value::String(arg) => {
+                                process.arg(arg);
+                            }
+                            types::modern::Value::StringArray(args) => {
+                                for arg in args {
+                                    process.arg(arg);
                                 }
                             }
                         }
-                    });
-                }
-                types::modern::JvmElement::String(arg) => {
-                    let arg = arg
-                        .replace("${natives_directory}", &native_directory.to_string_lossy())
-                        .replace("${launcher_name}", launcher_name)
-                        .replace("${launcher_version}", launcher_version)
-                        .replace("${classpath}", class_path);
-
-                    process.arg(arg);
-                }
-            });
-
-            process.arg(&json.main_class);
-
-            args.game.iter().for_each(|arg| match arg {
-                types::modern::GameElement::GameClass(_) => {
-                    // This is left empty, as I have not setup support for any of the features here
-                }
-                types::modern::GameElement::String(arg) => {
-                    let arg = arg
-                        .replace("${auth_player_name}", player_name)
-                        .replace("${version_name}", &json.id)
-                        .replace("${game_directory}", &directory.to_string_lossy())
-                        .replace("${assets_root}", &asset_root.to_string_lossy())
-                        .replace("${assets_index_name}", &json.asset_index.id)
-                        .replace("${auth_uuid}", auth_uuid)
-                        .replace("${auth_access_token}", access_token)
-                        .replace("${clientid}", client_id)
-                        .replace("${auth_xuid}", auth_xuid)
-                        .replace("${user_type}", "demo")
-                        .replace("${version_type}", &json.welcome_type);
-
-                    process.arg(arg);
+                    }
                 }
             });
         }
-        types::VersionJson::Legacy(json) => {}
-        types::VersionJson::Ancient(json) => todo!(),
-    };
+        types::modern::JvmElement::String(arg) => {
+            let arg = arg
+                .replace("${natives_directory}", &native_directory.to_string_lossy())
+                .replace("${launcher_name}", launcher_name)
+                .replace("${launcher_version}", launcher_version)
+                .replace("${classpath}", class_path);
+
+            process.arg(arg);
+        }
+    });
+
+    process.arg(&json.main_class);
+
+    args.game.iter().for_each(|arg| match arg {
+        types::modern::GameElement::GameClass(_) => {
+            // This is left empty, as I have not setup support for any of the features here
+        }
+        types::modern::GameElement::String(arg) => {
+            let arg = arg
+                .replace("${auth_player_name}", player_name)
+                .replace("${version_name}", &json.id)
+                .replace("${game_directory}", &directory.to_string_lossy())
+                .replace("${assets_root}", &asset_root.to_string_lossy())
+                .replace("${assets_index_name}", &json.asset_index.id)
+                .replace("${auth_uuid}", auth_uuid)
+                .replace("${auth_access_token}", access_token)
+                .replace("${clientid}", client_id)
+                .replace("${auth_xuid}", auth_xuid)
+                .replace("${user_type}", "demo")
+                .replace("${version_type}", &json.welcome_type);
+
+            process.arg(arg);
+        }
+    });
 
     println!("{:?}", process.get_args());
 

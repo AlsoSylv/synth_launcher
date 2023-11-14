@@ -50,6 +50,7 @@ impl VersionJson {
         }
     }
 
+    /// Refers to the client jar url
     pub fn url(&self) -> &str {
         match self {
             VersionJson::Modern(json) => &json.downloads.client.url,
@@ -58,6 +59,7 @@ impl VersionJson {
         }
     }
 
+    /// Refers to the client jar sha1
     pub fn sha1(&self) -> &str {
         match self {
             VersionJson::Modern(json) => &json.downloads.client.sha1,
