@@ -12,8 +12,8 @@ lto = true
 [workspace.dependencies]
 futures = "0.3"
 reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 sha1_smol = "1.0.0"
-serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 tokio = { version = "1.33", features = ["rt-multi-thread"], default-features = false }
 async-channel = "2.0.0"
