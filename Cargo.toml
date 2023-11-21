@@ -20,3 +20,6 @@ async-channel = "2.0.0"
 eframe = "0.23.0"
 launcher_core = { path = "./launcher_core" }
 async_bridge = { path = "./egui_fe/async_bridge" }
+
+# Override for security
+rustix = "0.38.19"
