@@ -1,4 +1,5 @@
 use std::pin::Pin;
+pub use async_channel::TryRecvError;
 
 enum InternalMessage<M, R> {
     Message(M),

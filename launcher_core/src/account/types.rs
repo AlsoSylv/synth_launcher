@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct DeviceCodeResponse {

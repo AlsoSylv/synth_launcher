@@ -12,8 +12,8 @@ const OS: &str = "osx";
 #[cfg(target_os = "linux")]
 const OS: &str = "linux";
 
-pub mod types;
 pub mod account;
+pub mod types;
 
 #[derive(Clone)]
 pub struct AsyncLauncher {
@@ -91,21 +91,17 @@ impl AsyncLauncher {
 
             if dt_cdn < dt_mod {
                 let buf = tokio::fs::read(file).await?;
-                let val = serde_json::from_slice(&buf)?;
-                return Ok(val);
+                return Ok(serde_json::from_slice(&buf)?);
             }
+        } else if !tokio::fs::try_exists(directory).await? {
+            tokio::fs::create_dir_all(directory).await?;
         }
 
-        let bytes = self
-            .client
-            .get(VERSION_MANIFEST_URL)
-            .send()
-            .await?
-            .bytes()
-            .await?;
+        let response = self.client.get(VERSION_MANIFEST_URL).send().await?;
+        let bytes = response.bytes().await?;
+
         tokio::fs::write(file, &bytes).await?;
-        let val = serde_json::from_slice(&bytes)?;
-        Ok(val)
+        Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// This expects a path such as `./Versions`
@@ -115,27 +111,23 @@ impl AsyncLauncher {
         directory: &Path,
     ) -> Result<types::VersionJson, Error> {
         let directory = directory.join(&version_details.id);
-        let file = directory.join(version_details.id.clone() + ".json");
+        let file = directory.join(format!("{}.json", version_details.id));
+
         if tokio::fs::try_exists(&file).await? {
             let buf = tokio::fs::read(file).await?;
-            let val = serde_json::from_slice(&buf)?;
-            Ok(val)
-        } else {
-            let buf = self
-                .client
-                .get(&version_details.url)
-                .send()
-                .await?
-                .bytes()
-                .await?;
-
-            tokio::fs::create_dir_all(&directory).await?;
-
-            tokio::fs::write(file, &buf).await?;
-
-            let val = serde_json::from_slice(&buf)?;
-            Ok(val)
+            return Ok(serde_json::from_slice(&buf)?);
         }
+
+        let response = self.client.get(&version_details.url).send().await?;
+        let buf = response.bytes().await?;
+
+        if !tokio::fs::try_exists(&directory).await? {
+            tokio::fs::create_dir_all(&directory).await?;
+        }
+        tokio::fs::write(file, &buf).await?;
+
+        let val = serde_json::from_slice(&buf)?;
+        Ok(val)
     }
 
     /// This expects a top level path, ie: "./Assets", and will append /indexes/ to the end to store them
@@ -145,24 +137,19 @@ impl AsyncLauncher {
         directory: &Path,
     ) -> Result<types::AssetIndexJson, Error> {
         let directory = directory.join("indexes");
-        let file = directory.join(&asset_index.id);
+        let file = directory.join(format!("{}.json", asset_index.id));
         if tokio::fs::try_exists(&file).await? {
             let buf = tokio::fs::read(&file).await?;
             let val = serde_json::from_slice(&buf)?;
             Ok(val)
         } else {
-            let buf = self
-                .client
-                .get(&asset_index.url)
-                .send()
-                .await?
-                .bytes()
-                .await?;
+            let response = self.client.get(&asset_index.url).send().await?;
+            let buf = response.bytes().await?;
             if !tokio::fs::try_exists(&directory).await? {
                 tokio::fs::create_dir_all(&directory).await?;
             }
 
-            tokio::fs::write(directory.join(&asset_index.id), &buf).await?;
+            tokio::fs::write(file, &buf).await?;
 
             let val = serde_json::from_slice(&buf)?;
             Ok(val)
@@ -513,9 +500,7 @@ mod tests {
                 .get_version_json(version, &Path::new("./Versions"))
                 .await
             {
-                Ok(VersionJson::Modern(version)) => version.libraries,
-                Ok(VersionJson::Legacy(version)) => version.libraries,
-                Ok(VersionJson::Ancient(version)) => version.libraries,
+                Ok(version) => version.libraries().clone(),
                 Err(err) => panic!("How {err:?}"),
             };
             // println!("{:?}", version.id);
@@ -532,13 +517,5 @@ mod tests {
             break;
         }
         fs::remove_dir_all("./Libs").unwrap();
-    }
-
-    #[tokio::test]
-    async fn write_new_file() {
-        let path = Path::new("./Help/Me.txt");
-        let parent = path.parent().unwrap();
-        tokio::fs::create_dir_all(parent).await.unwrap();
-        tokio::fs::write("./Help/Me.txt", b"Help").await.unwrap();
     }
 }

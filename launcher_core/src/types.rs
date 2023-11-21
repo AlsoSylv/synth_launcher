@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VersionManifest {
     pub latest: Latest,
-    pub versions: Vec<Version>,
+    pub versions: Vec<Arc<Version>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,7 +39,6 @@ pub enum Type {
 pub enum VersionJson {
     Modern(Modern),
     Legacy(Legacy),
-    Ancient(Ancient),
 }
 
 impl VersionJson {
@@ -46,7 +47,6 @@ impl VersionJson {
         match self {
             VersionJson::Modern(json) => &json.id,
             VersionJson::Legacy(json) => &json.id,
-            VersionJson::Ancient(json) => &json.id,
         }
     }
 
@@ -55,7 +55,6 @@ impl VersionJson {
         match self {
             VersionJson::Modern(json) => &json.downloads.client.url,
             VersionJson::Legacy(json) => &json.downloads.client.url,
-            VersionJson::Ancient(json) => &json.downloads.client.url,
         }
     }
 
@@ -64,7 +63,20 @@ impl VersionJson {
         match self {
             VersionJson::Modern(json) => &json.downloads.client.sha1,
             VersionJson::Legacy(json) => &json.downloads.client.sha1,
-            VersionJson::Ancient(json) => &json.downloads.client.sha1,
+        }
+    }
+
+    pub fn libraries(&self) -> &Arc<[Library]> {
+        match self {
+            VersionJson::Modern(json) => &json.libraries,
+            VersionJson::Legacy(json) => &json.libraries,
+        }
+    }
+
+    pub fn asset_index(&self) -> &Arc<AssetIndex> {
+        match self {
+            VersionJson::Modern(json) => &json.asset_index,
+            VersionJson::Legacy(json) => &json.asset_index,
         }
     }
 }
@@ -154,7 +166,6 @@ pub struct Object {
     pub size: i64,
 }
 
-pub use ancient::Ancient;
 pub use legacy::Legacy;
 pub use modern::Modern;
 
@@ -168,7 +179,7 @@ pub mod modern {
     #[serde(rename_all = "camelCase")]
     pub struct Modern {
         pub arguments: Arguments,
-        pub asset_index: AssetIndex,
+        pub asset_index: Arc<AssetIndex>,
         pub assets: String,
         pub compliance_level: i64,
         pub downloads: WelcomeDownloads,
@@ -253,14 +264,14 @@ pub mod modern {
 
     #[derive(Debug, Serialize, Deserialize)]
     pub struct WelcomeDownloads {
-        pub client: ClientMappingsClass,
-        pub client_mappings: Option<ClientMappingsClass>,
-        pub server: ClientMappingsClass,
-        pub server_mappings: Option<ClientMappingsClass>,
+        pub client: Jar,
+        pub client_mappings: Option<Jar>,
+        pub server: Jar,
+        pub server_mappings: Option<Jar>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub struct ClientMappingsClass {
+    pub struct Jar {
         pub sha1: String,
         pub size: i64,
         pub url: String,
@@ -297,14 +308,14 @@ pub mod legacy {
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct Legacy {
-        pub asset_index: AssetIndex,
+        pub asset_index: Arc<AssetIndex>,
         pub assets: String,
         pub compliance_level: Option<i64>,
-        pub downloads: WelcomeDownloads,
+        pub downloads: Downloads,
         pub id: String,
         pub java_version: Option<JavaVersion>,
         pub libraries: Arc<[Library]>,
-        pub logging: Logging,
+        pub logging: Option<Logging>,
         pub main_class: String,
         pub minecraft_arguments: String,
         pub minimum_launcher_version: i64,
@@ -315,13 +326,14 @@ pub mod legacy {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub struct WelcomeDownloads {
-        pub client: ServerClass,
-        pub server: ServerClass,
+    pub struct Downloads {
+        pub client: Jar,
+        pub server: Option<Jar>,
+        pub windows_server: Option<Jar>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub struct ServerClass {
+    pub struct Jar {
         pub sha1: String,
         pub size: i64,
         pub url: String,
@@ -346,44 +358,5 @@ pub mod legacy {
         pub file: AssetIndex,
         #[serde(rename = "type")]
         pub client_type: String,
-    }
-}
-
-pub mod ancient {
-    use std::sync::Arc;
-
-    use super::{AssetIndex, Library};
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Ancient {
-        pub asset_index: AssetIndex,
-        pub assets: String,
-        pub downloads: WelcomeDownloads,
-        pub id: String,
-        pub libraries: Arc<[Library]>,
-        pub main_class: String,
-        pub minecraft_arguments: String,
-        pub minimum_launcher_version: i64,
-        pub release_time: String,
-        pub time: String,
-        #[serde(rename = "type")]
-        pub welcome_type: String,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub struct WelcomeDownloads {
-        pub client: Client,
-        pub server: Option<Client>,
-        pub windows_server: Option<Client>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub struct Client {
-        pub sha1: String,
-        pub size: i64,
-        pub url: String,
-        pub path: Option<String>,
     }
 }

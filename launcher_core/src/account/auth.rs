@@ -4,7 +4,10 @@ use serde_json::json;
 
 use super::types;
 
-pub async fn device_response(client: &reqwest::Client, client_id: &str) -> Result<types::DeviceCodeResponse, crate::Error> {
+pub async fn device_response(
+    client: &reqwest::Client,
+    client_id: &str,
+) -> Result<types::DeviceCodeResponse, crate::Error> {
     let val = client
         .get("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode")
         .form(&vec![
@@ -23,7 +26,7 @@ pub async fn device_response(client: &reqwest::Client, client_id: &str) -> Resul
 pub async fn authorization_token_response(
     client: &reqwest::Client,
     device_code: &str,
-    client_id: &str
+    client_id: &str,
 ) -> Result<types::AuthorizationTokenResponse, crate::Error> {
     let val = client
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
@@ -43,7 +46,7 @@ pub async fn authorization_token_response(
 pub async fn refresh_token_response(
     client: &reqwest::Client,
     refresh_token: &str,
-    client_id: &str
+    client_id: &str,
 ) -> Result<types::RefreshTokenResponse, crate::Error> {
     let val = client
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
