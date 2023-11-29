@@ -12,5 +12,6 @@ lto = true
 eframe.workspace = true
 launcher_core.workspace = true
 async_bridge.workspace = true
+async-channel.workspace = true
 tokio.workspace = true
 reqwest.workspace = true

@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::{path::Path, sync::atomic::AtomicUsize};
 
 use futures::{stream, TryStreamExt};
@@ -45,13 +46,14 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-impl ToString for Error {
-    fn to_string(&self) -> String {
-        match self {
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
             Error::Reqwest(err) => err.to_string(),
             Error::Tokio(err) => err.to_string(),
             Error::SerdeJson(err) => err.to_string(),
-        }
+        };
+        write!(f, "{}", str)
     }
 }
 
@@ -171,7 +173,9 @@ impl AsyncLauncher {
             std::sync::atomic::Ordering::Relaxed,
         );
 
-        let object_path = directory.join("Objects");
+        finished.store(0, std::sync::atomic::Ordering::Relaxed);
+
+        let object_path = directory.join("objects");
         if !tokio::fs::try_exists(&object_path).await? {
             tokio::fs::create_dir(&object_path).await?;
         }
@@ -186,11 +190,11 @@ impl AsyncLauncher {
                     let dir_path = directory.join(first_two);
                     let file_path = dir_path.join(&asset.hash);
 
-                    if !dir_path.try_exists()? {
-                        tokio::fs::create_dir(dir_path).await?;
+                    if !tokio::fs::try_exists(&dir_path).await? {
+                        tokio::fs::create_dir_all(dir_path).await?;
                     }
 
-                    let url = if file_path.try_exists()? {
+                    let url = if tokio::fs::try_exists(&file_path).await? {
                         let buf = tokio::fs::read(&file_path).await?;
                         sha1.update(&buf);
 
@@ -227,6 +231,8 @@ impl AsyncLauncher {
     ) -> Result<String, Error> {
         let mut path = String::new();
 
+        finished.store(0, std::sync::atomic::Ordering::Relaxed);
+
         stream::iter(libraries.iter().filter_map(|library| {
             let dir = directory.to_str().unwrap();
             path.reserve(library.name.len() + dir.len() + 2);
@@ -249,7 +255,7 @@ impl AsyncLauncher {
                 lib = Some(library);
             }
 
-            // This garuntees that it is intilized
+            // This guarantees that it is initialized
             // Because if it's none here then there
             // Is no library to check to begin with
             let Some(lib) = lib else {
@@ -287,7 +293,7 @@ impl AsyncLauncher {
 
             total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-            Some(Ok::<&types::Artifact, Error>(artifact))
+            Some(Ok::<_, Error>(artifact))
         }))
         .try_for_each_concurrent(16, |artifact| {
             let client = self.client.clone();
@@ -303,6 +309,7 @@ impl AsyncLauncher {
                     let buf = tokio::fs::read(&path).await?;
                     sha1.update(&buf);
                     if sha1.digest().to_string() == artifact.sha1 {
+                        finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         return Ok(());
                     } else {
                         tokio::fs::remove_file(&path).await?;
@@ -402,29 +409,33 @@ pub fn launch_modern_version(
 
     process.arg(&json.main_class);
 
-    args.game.iter().for_each(|arg| match arg {
-        types::modern::GameElement::GameClass(_) => {
-            // This is left empty, as I have not setup support for any of the features here
-        }
-        types::modern::GameElement::String(arg) => {
-            let arg = arg
-                .replace("${auth_player_name}", player_name)
-                .replace("${version_name}", &json.id)
-                .replace("${game_directory}", &directory.to_string_lossy())
-                .replace("${assets_root}", &asset_root.to_string_lossy())
-                .replace("${assets_index_name}", &json.asset_index.id)
-                .replace("${auth_uuid}", auth_uuid)
-                .replace("${auth_access_token}", access_token)
-                .replace("${clientid}", client_id)
-                .replace("${auth_xuid}", auth_xuid)
-                .replace("${user_type}", "demo")
-                .replace("${version_type}", &json.welcome_type);
+    for arg in &args.game {
+        match arg {
+            types::modern::GameElement::GameClass(_) => {
+                // This is left empty, as I have not setup support for any of the features here
+            }
+            types::modern::GameElement::String(arg) => {
+                if arg == "--uuid" || arg == "${auth_uuid}" {
+                    continue;
+                }
 
-            process.arg(arg);
-        }
-    });
+                let arg = arg
+                    .replace("${auth_player_name}", player_name)
+                    .replace("${version_name}", &json.id)
+                    .replace("${game_directory}", &directory.to_string_lossy())
+                    .replace("${assets_root}", &asset_root.to_string_lossy())
+                    .replace("${assets_index_name}", &json.asset_index.id)
+                    .replace("${auth_uuid}", auth_uuid)
+                    .replace("${auth_access_token}", access_token)
+                    .replace("${clientid}", client_id)
+                    .replace("${auth_xuid}", auth_xuid)
+                    .replace("${user_type}", "demo")
+                    .replace("${version_type}", &json.welcome_type);
 
-    println!("{:?}", process.get_args());
+                process.arg(arg);
+            }
+        }
+    }
 
     process.spawn().unwrap();
 }

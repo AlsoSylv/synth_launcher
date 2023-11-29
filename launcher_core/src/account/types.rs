@@ -4,71 +4,71 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct DeviceCodeResponse {
-    user_code: String,
-    device_code: String,
-    verification_uri: String,
-    expires_in: u32,
-    interval: u64,
-    message: String,
+    pub user_code: String,
+    pub device_code: String,
+    pub verification_uri: String,
+    pub expires_in: u32,
+    pub interval: u64,
+    pub message: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct AuthorizationTokenResponse {
-    token_type: String,
-    scope: String,
-    expires_in: u64,
-    ext_expires_in: u32,
-    access_token: String,
-    refresh_token: String,
+    pub token_type: String,
+    pub scope: String,
+    pub expires_in: u64,
+    pub ext_expires_in: u32,
+    pub access_token: String,
+    pub refresh_token: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct RefreshTokenResponse {
-    access_token: String,
-    refresh_token: String,
-    scope: String,
-    expires_in: u32,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub scope: String,
+    pub expires_in: u32,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "PascalCase")]
 pub struct XboxLiveAuthenticationResponse {
-    issue_instant: String,
-    not_after: String,
-    token: String,
-    display_claims: HashMap<String, Vec<HashMap<String, String>>>,
+    pub issue_instant: String,
+    pub not_after: String,
+    pub token: String,
+    pub display_claims: HashMap<String, Vec<HashMap<String, String>>>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct MinecraftAuthenticationResponse {
-    username: String,
-    access_token: String,
-    token_type: String,
-    expires_in: u32,
+    pub username: String,
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_in: u32,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct MinecraftProfileResponse {
-    id: String,
-    name: String,
-    skins: Vec<Skin>,
-    capes: Vec<Cape>,
+    pub id: String,
+    pub name: String,
+    pub skins: Vec<Skin>,
+    pub capes: Vec<Cape>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Skin {
-    id: String,
-    state: String,
-    url: String,
-    variant: String,
+    pub id: String,
+    pub state: String,
+    pub url: String,
+    pub variant: String,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Cape {
-    id: String,
-    state: String,
-    url: String,
-    alias: String,
+    pub id: String,
+    pub state: String,
+    pub url: String,
+    pub alias: String,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

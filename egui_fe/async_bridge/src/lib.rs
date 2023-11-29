@@ -1,5 +1,5 @@
-use std::pin::Pin;
 pub use async_channel::TryRecvError;
+use std::pin::Pin;
 
 enum InternalMessage<M, R> {
     Message(M),
@@ -88,9 +88,7 @@ where
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         self.tx
-            .send_blocking(InternalMessage::Callback(Box::pin(callback(
-                &self.state,
-            ))))
+            .send_blocking(InternalMessage::Callback(Box::pin(callback(&self.state))))
             .expect("There should be no way to close the channel on the other end here")
     }
 
@@ -100,9 +98,9 @@ where
         Fut: std::future::Future<Output = R> + Send + 'static,
     {
         self.tx
-            .send_blocking(InternalMessage::CallbackWithResponse(Box::pin(
-                callback(&self.state),
-            )))
+            .send_blocking(InternalMessage::CallbackWithResponse(Box::pin(callback(
+                &self.state,
+            ))))
             .expect("There should be no way to close the channel on the other end here")
     }
 
