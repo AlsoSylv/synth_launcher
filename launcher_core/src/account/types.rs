@@ -48,7 +48,7 @@ pub struct MinecraftAuthenticationResponse {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct MinecraftProfileResponse {
+pub struct Profile {
     pub id: String,
     pub name: String,
     pub skins: Vec<Skin>,
@@ -78,12 +78,4 @@ pub struct Account {
     pub access_token: String,
     pub refresh_token: String,
     pub profile: Profile,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct Profile {
-    pub id: String,
-    pub name: String,
-    pub skins: Vec<Skin>,
-    pub capes: Vec<Cape>,
 }

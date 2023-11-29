@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use serde_json::json;
+use crate::account::types::XboxLiveAuthenticationResponse;
 
 use super::types;
 
@@ -63,6 +64,29 @@ pub async fn refresh_token_response(
     Ok(val)
 }
 
+pub async fn xbox_response(
+    client: &reqwest::Client,
+    access_token: &str,
+) -> Result<XboxLiveAuthenticationResponse, crate::Error> {
+    let val = client
+        .post("https://user.auth.xboxlive.com/user/authenticate")
+        .json(&json!({
+                "Properties": {
+                "AuthMethod": "RPS",
+                "SiteName": "user.auth.xboxlive.com",
+                "RpsTicket": &format!("d={}", access_token)
+            },
+            "RelyingParty": "http://auth.xboxlive.com",
+            "TokenType": "JWT"
+        }))
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    Ok(val)
+}
+
 pub async fn xbox_security_token_response(
     client: &reqwest::Client,
     token: &str,
@@ -87,14 +111,14 @@ pub async fn xbox_security_token_response(
 }
 
 pub async fn minecraft_response(
-    display_claims: HashMap<String, Vec<HashMap<String, String>>>,
+    display_claims: &HashMap<String, Vec<HashMap<String, String>>>,
     token: &str,
     client: &reqwest::Client,
 ) -> Result<types::MinecraftAuthenticationResponse, crate::Error> {
     let val = client
         .post("https://api.minecraftservices.com/authentication/login_with_xbox")
         .json(&json!({
-            "identityToken": &format!("XBL3.0 x={};{}", &display_claims["xui"][0]["uhs"], token)
+            "identityToken": format!("XBL3.0 x={};{}", &display_claims["xui"][0]["uhs"], token)
         }))
         .send()
         .await?
@@ -105,12 +129,12 @@ pub async fn minecraft_response(
 }
 
 pub async fn minecraft_profile_response(
-    access_token: String,
+    access_token: &str,
     client: &reqwest::Client,
-) -> Result<types::MinecraftProfileResponse, crate::Error> {
+) -> Result<types::Profile, crate::Error> {
     let val = client
         .get("https://api.minecraftservices.com/minecraft/profile")
-        .bearer_auth(&access_token)
+        .bearer_auth(access_token)
         .send()
         .await?
         .json()

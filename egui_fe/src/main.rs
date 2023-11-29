@@ -7,18 +7,21 @@ use std::{
 };
 
 use eframe::egui::{self, Button, Style};
-use launcher_core::account::auth::authorization_token_response;
+use launcher_core::account::auth::{authorization_token_response, minecraft_profile_response, minecraft_response, xbox_response, xbox_security_token_response};
 use launcher_core::{
     account::auth::device_response,
     types::{AssetIndex, AssetIndexJson, Library, Version, VersionJson, VersionManifest},
     Error,
 };
-use launcher_core::account::types::AuthorizationTokenResponse;
+use launcher_core::account::types::{Account, AuthorizationTokenResponse, Profile};
 
 struct LauncherGui {
     rt: async_bridge::Runtime<Message, Response, State>,
     data: MCData,
     current_error: Option<Error>,
+    account: Option<Account>,
+    url: Option<String>,
+    code: Option<Arc<String>>,
     rx: async_channel::Receiver<EarlyMessage>,
 }
 
@@ -81,7 +84,7 @@ enum Response {
     AssetIndex(Result<AssetIndexJson, Error>),
     Asset(Result<(), Error>),
     Jar(Result<String, Error>),
-    Auth(Result<AuthorizationTokenResponse, Error>)
+    Auth(Result<Account, Error>)
 }
 
 #[derive(Clone)]
@@ -155,7 +158,7 @@ fn worker_event_loop(
                     Err(e) => return Response::Auth(Err(e)),
                 };
 
-                let code = Arc::new(device_response.device_code);
+                let code = Arc::new(device_response.user_code);
                 let ms_url = device_response.verification_uri;
 
                 tx.send(EarlyMessage::Link(ms_url)).await.unwrap();
@@ -164,13 +167,48 @@ fn worker_event_loop(
                 let auth_res: AuthorizationTokenResponse;
 
                 loop {
-                    if let Ok(t) = authorization_token_response(&client, &code, CLIENT_ID).await {
+                    if let Ok(t) = authorization_token_response(&client, &device_response.device_code, CLIENT_ID).await {
                         auth_res = t;
                         break;
                     }
                 }
 
-                Response::Auth(Ok(auth_res))
+                let xbox_response = match xbox_response(&client, &auth_res.access_token).await {
+                    Ok(t) => t,
+                    Err(e) => return Response::Auth(Err(e)),
+                };
+
+                let xbox_secure_token_res = match xbox_security_token_response(&client, &xbox_response.token).await {
+                    Ok(t) => t,
+                    Err(e) => return Response::Auth(Err(e)),
+                };
+
+                let mc_res = match minecraft_response(&xbox_secure_token_res.display_claims, &xbox_secure_token_res.token, &client).await {
+                    Ok(t) => t,
+                    Err(e) => return Response::Auth(Err(e)),
+                };
+
+                let mc_profile_res = match minecraft_profile_response(&mc_res.access_token, &client).await {
+                    Ok(t) => t,
+                    Err(e) => return Response::Auth(Err(e)),
+                };
+
+                let expires_in = std::time::Duration::from_secs(auth_res.expires_in);
+                let system_time = std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .unwrap();
+                let combined_duration = system_time + expires_in;
+                let combined_timestamp = combined_duration.as_secs();
+
+                let account = Account {
+                    active: true,
+                    expiry: combined_timestamp,
+                    access_token: auth_res.access_token,
+                    refresh_token: auth_res.refresh_token,
+                    profile: mc_profile_res,
+                };
+
+                Response::Auth(Ok(account))
             }
         }
     }
@@ -204,7 +242,10 @@ impl LauncherGui {
             rt,
             data: Default::default(),
             current_error: None,
-            rx
+            rx,
+            account: None,
+            code: None,
+            url: None,
         }
     }
 
@@ -249,7 +290,7 @@ impl LauncherGui {
                     self.data.jar = true;
                     self.data.jar_path = result.unwrap();
                 }
-                Response::Auth(_) => {}
+                Response::Auth(res) => println!("{res:?}"),
             }
         }
     }
@@ -293,7 +334,7 @@ impl LauncherGui {
                     "null",
                     class_path,
                 ),
-                VersionJson::Legacy(_) => todo!(),
+                VersionJson::Legacy(_) => todo!("There is no function for launching legacy versions yet"),
             };
         }
     }
@@ -303,6 +344,7 @@ impl eframe::App for LauncherGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.update_state(ctx);
         if !self.data.versions_task_started {
+            self.rt.send_with_message(Message::Auth);
             self.rt.send_with_message(Message::Versions);
             self.data.versions_task_started = true;
         }
@@ -310,6 +352,26 @@ impl eframe::App for LauncherGui {
         if let Some(error) = &self.current_error {
             egui::Window::new("Help").auto_sized().show(ctx, |ui| {
                 ui.label(error.to_string());
+            });
+        }
+
+        if self.account.is_none() {
+            egui::Window::new("Login").auto_sized().show(ctx, |ui| {
+                if self.url.is_none() || self.code.is_none() {
+                    ui.label("Loading code and url, please wait...");
+                    if let Ok(val) = self.rx.try_recv() {
+                        match val {
+                            EarlyMessage::Link(url) => self.url = Some(url),
+                            EarlyMessage::Code(code) => self.code = Some(code),
+                        }
+                    }
+                } else {
+                    let url = self.url.as_ref().unwrap();
+                    let code = self.code.as_ref().unwrap();
+                    let hyper = egui::Hyperlink::from_label_and_url("Click here to login", url);
+                    ui.label(&**code);
+                    ui.add(hyper);
+                }
             });
         }
 
