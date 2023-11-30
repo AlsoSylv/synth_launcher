@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::types::modern::Value;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -45,6 +46,20 @@ pub struct MinecraftAuthenticationResponse {
     pub access_token: String,
     pub token_type: String,
     pub expires_in: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductCheck {
+    pub items: Vec<Item>,
+    pub signature: Value,
+    pub key_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Item {
+    pub name: String,
+    pub signature: Value,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

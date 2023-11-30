@@ -7,13 +7,16 @@ use std::{
 };
 
 use eframe::egui::{self, Button, Style};
-use launcher_core::account::auth::{authorization_token_response, minecraft_profile_response, minecraft_response, xbox_response, xbox_security_token_response};
+use launcher_core::account::auth::{
+    authorization_token_response, minecraft_ownership_response, minecraft_profile_response,
+    minecraft_response, xbox_response, xbox_security_token_response,
+};
+use launcher_core::account::types::{Account, AuthorizationTokenResponse};
 use launcher_core::{
     account::auth::device_response,
     types::{AssetIndex, AssetIndexJson, Library, Version, VersionJson, VersionManifest},
     Error,
 };
-use launcher_core::account::types::{Account, AuthorizationTokenResponse, Profile};
 
 struct LauncherGui {
     rt: async_bridge::Runtime<Message, Response, State>,
@@ -84,7 +87,7 @@ enum Response {
     AssetIndex(Result<AssetIndexJson, Error>),
     Asset(Result<(), Error>),
     Jar(Result<String, Error>),
-    Auth(Result<Account, Error>)
+    Auth(Result<Account, Error>),
 }
 
 #[derive(Clone)]
@@ -96,7 +99,7 @@ struct State {
 
 enum EarlyMessage {
     Link(String),
-    Code(Arc<String>)
+    Code(Arc<String>),
 }
 
 fn worker_event_loop(
@@ -151,6 +154,7 @@ fn worker_event_loop(
                 Response::Jar(result)
             }
             Message::Auth => {
+                // https://wiki.vg/Microsoft_Authentication_Scheme
                 const CLIENT_ID: &str = "";
 
                 let device_response = match device_response(&client, CLIENT_ID).await {
@@ -167,7 +171,13 @@ fn worker_event_loop(
                 let auth_res: AuthorizationTokenResponse;
 
                 loop {
-                    if let Ok(t) = authorization_token_response(&client, &device_response.device_code, CLIENT_ID).await {
+                    if let Ok(t) = authorization_token_response(
+                        &client,
+                        &device_response.device_code,
+                        CLIENT_ID,
+                    )
+                    .await
+                    {
                         auth_res = t;
                         break;
                     }
@@ -178,20 +188,38 @@ fn worker_event_loop(
                     Err(e) => return Response::Auth(Err(e)),
                 };
 
-                let xbox_secure_token_res = match xbox_security_token_response(&client, &xbox_response.token).await {
+                let xbox_secure_token_res =
+                    match xbox_security_token_response(&client, &xbox_response.token).await {
+                        Ok(t) => t,
+                        Err(e) => return Response::Auth(Err(e)),
+                    };
+
+                let mc_res = match minecraft_response(
+                    &xbox_secure_token_res.display_claims,
+                    &xbox_secure_token_res.token,
+                    &client,
+                )
+                .await
+                {
                     Ok(t) => t,
                     Err(e) => return Response::Auth(Err(e)),
                 };
 
-                let mc_res = match minecraft_response(&xbox_secure_token_res.display_claims, &xbox_secure_token_res.token, &client).await {
-                    Ok(t) => t,
-                    Err(e) => return Response::Auth(Err(e)),
-                };
+                let ownership_check =
+                    match minecraft_ownership_response(&mc_res.access_token, &client).await {
+                        Ok(t) => t,
+                        Err(e) => return Response::Auth(Err(e)),
+                    };
 
-                let mc_profile_res = match minecraft_profile_response(&mc_res.access_token, &client).await {
-                    Ok(t) => t,
-                    Err(e) => return Response::Auth(Err(e)),
-                };
+                if ownership_check.items.is_empty() {
+                    return todo!();
+                }
+
+                let mc_profile_res =
+                    match minecraft_profile_response(&mc_res.access_token, &client).await {
+                        Ok(t) => t,
+                        Err(e) => return Response::Auth(Err(e)),
+                    };
 
                 let expires_in = std::time::Duration::from_secs(auth_res.expires_in);
                 let system_time = std::time::SystemTime::now()
@@ -286,11 +314,17 @@ impl LauncherGui {
                     Ok(()) => self.data.assets = true,
                     Err(err) => self.current_error = Some(err),
                 },
-                Response::Jar(result) => {
-                    self.data.jar = true;
-                    self.data.jar_path = result.unwrap();
-                }
-                Response::Auth(res) => println!("{res:?}"),
+                Response::Jar(res) => match res {
+                    Ok(jar) => {
+                        self.data.jar = true;
+                        self.data.jar_path = jar;
+                    }
+                    Err(err) => self.current_error = Some(err),
+                },
+                Response::Auth(res) => match res {
+                    Ok(acc) => self.account = Some(acc),
+                    Err(err) => self.current_error = Some(err),
+                },
             }
         }
     }
@@ -319,22 +353,26 @@ impl LauncherGui {
             let dir = Path::new("./");
             let class_path = &self.data.class_path;
 
+            let acc = self.account.as_ref().unwrap();
+
             match json.as_ref() {
                 VersionJson::Modern(modern) => launcher_core::launch_modern_version(
                     modern,
                     dir,
                     &dir.join("assets"),
-                    "Sylv",
-                    "null",
-                    "null",
-                    "null",
+                    &acc.profile.name,
+                    &acc.profile.id,
+                    &acc.access_token,
+                    "cynth_launcher",
                     "null",
                     &dir.join("libraries"),
-                    "null",
-                    "null",
+                    "Cynth Launcher",
+                    "0.1.0",
                     class_path,
                 ),
-                VersionJson::Legacy(_) => todo!("There is no function for launching legacy versions yet"),
+                VersionJson::Legacy(_) => {
+                    todo!("There is no function for launching legacy versions yet")
+                }
             };
         }
     }
@@ -450,7 +488,7 @@ impl eframe::App for LauncherGui {
             let button = Button::new("Play");
 
             let enabled = ui.add_enabled(
-                self.data.version_json.is_some() && !self.data.launching,
+                self.data.version_json.is_some() && !self.data.launching && self.account.is_some(),
                 button,
             );
 

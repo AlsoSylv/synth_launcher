@@ -415,10 +415,6 @@ pub fn launch_modern_version(
                 // This is left empty, as I have not setup support for any of the features here
             }
             types::modern::GameElement::String(arg) => {
-                if arg == "--uuid" || arg == "${auth_uuid}" {
-                    continue;
-                }
-
                 let arg = arg
                     .replace("${auth_player_name}", player_name)
                     .replace("${version_name}", &json.id)

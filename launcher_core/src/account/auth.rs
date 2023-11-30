@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use crate::account::types::{ProductCheck, XboxLiveAuthenticationResponse};
 use serde_json::json;
-use crate::account::types::XboxLiveAuthenticationResponse;
 
 use super::types;
 
@@ -134,6 +134,21 @@ pub async fn minecraft_profile_response(
 ) -> Result<types::Profile, crate::Error> {
     let val = client
         .get("https://api.minecraftservices.com/minecraft/profile")
+        .bearer_auth(access_token)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    Ok(val)
+}
+
+pub async fn minecraft_ownership_response(
+    access_token: &str,
+    client: &reqwest::Client,
+) -> Result<ProductCheck, crate::Error> {
+    let val = client
+        .get("https://api.minecraftservices.com/entitlements/mcstore")
         .bearer_auth(access_token)
         .send()
         .await?
