@@ -83,6 +83,7 @@ impl VersionJson {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct AssetIndex {
     pub id: String,
     pub sha1: String,
@@ -92,6 +93,7 @@ pub struct AssetIndex {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Library {
     pub downloads: LibraryDownloads,
     pub name: String,
@@ -101,6 +103,7 @@ pub struct Library {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Natives {
     pub linux: Option<String>,
     pub osx: Option<String>,
@@ -108,11 +111,13 @@ pub struct Natives {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Extract {
     pub exclude: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rule {
     pub action: Action,
     pub os: Option<Os>,
@@ -120,18 +125,21 @@ pub struct Rule {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum Action {
     Allow,
     Disallow,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Os {
     pub name: String,
     pub version: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LibraryDownloads {
     pub artifact: Option<Artifact>,
     pub classifiers: Option<Classifiers>,
@@ -139,15 +147,20 @@ pub struct LibraryDownloads {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct Classifiers {
     #[serde(rename = "linux-x86_64")]
     pub linux_x86_64: Option<Artifact>,
     pub natives_linux: Option<Artifact>,
+    pub natives_macos: Option<Artifact>,
     pub natives_osx: Option<Artifact>,
     pub natives_windows: Option<Artifact>,
+    pub natives_windows_32: Option<Artifact>,
+    pub natives_windows_64: Option<Artifact>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Artifact {
     pub sha1: String,
     pub size: i64,
@@ -156,11 +169,13 @@ pub struct Artifact {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AssetIndexJson {
     pub objects: std::collections::HashMap<String, Object>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Object {
     pub hash: String,
     pub size: i64,
@@ -177,6 +192,7 @@ pub mod modern {
 
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
+    #[serde(deny_unknown_fields)]
     pub struct Modern {
         pub arguments: Arguments,
         pub asset_index: Arc<AssetIndex>,
@@ -196,6 +212,7 @@ pub mod modern {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct Arguments {
         pub game: Vec<GameElement>,
         pub jvm: Vec<JvmElement>,
@@ -203,12 +220,14 @@ pub mod modern {
 
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(untagged)]
+    #[serde(deny_unknown_fields)]
     pub enum GameElement {
         GameClass(GameClass),
         String(String),
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct GameClass {
         pub rules: Vec<GameRule>,
         pub value: Value,
@@ -216,18 +235,21 @@ pub mod modern {
 
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(untagged)]
+    #[serde(deny_unknown_fields)]
     pub enum Value {
         String(String),
         StringArray(Vec<String>),
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct GameRule {
         pub action: Action,
         pub features: Features,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct Features {
         pub is_demo_user: Option<bool>,
         pub has_custom_resolution: Option<bool>,
@@ -239,30 +261,36 @@ pub mod modern {
 
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(untagged)]
+    #[serde(deny_unknown_fields)]
     pub enum JvmElement {
         JvmClass(JvmClass),
         String(String),
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct JvmClass {
         pub rules: Vec<JvmRule>,
         pub value: Value,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct JvmRule {
         pub action: Action,
         pub os: PurpleOs,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct PurpleOs {
         pub name: Option<String>,
         pub arch: Option<String>,
+        pub version: Option<String>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct WelcomeDownloads {
         pub client: Jar,
         pub client_mappings: Option<Jar>,
@@ -271,6 +299,7 @@ pub mod modern {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct Jar {
         pub sha1: String,
         pub size: i64,
@@ -280,17 +309,20 @@ pub mod modern {
 
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
+    #[serde(deny_unknown_fields)]
     pub struct JavaVersion {
         pub component: String,
         pub major_version: i64,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct Logging {
         pub client: LoggingClient,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct LoggingClient {
         pub argument: String,
         pub file: AssetIndex,
@@ -307,6 +339,7 @@ pub mod legacy {
 
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
+    #[serde(deny_unknown_fields)]
     pub struct Legacy {
         pub asset_index: Arc<AssetIndex>,
         pub assets: String,
@@ -326,6 +359,7 @@ pub mod legacy {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct Downloads {
         pub client: Jar,
         pub server: Option<Jar>,
@@ -333,6 +367,7 @@ pub mod legacy {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct Jar {
         pub sha1: String,
         pub size: i64,
@@ -342,17 +377,20 @@ pub mod legacy {
 
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
+    #[serde(deny_unknown_fields)]
     pub struct JavaVersion {
         pub component: String,
         pub major_version: i64,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct Logging {
         pub client: LoggingClient,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct LoggingClient {
         pub argument: String,
         pub file: AssetIndex,

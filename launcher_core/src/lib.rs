@@ -1,6 +1,7 @@
 use std::fmt::Display;
 use std::{path::Path, sync::atomic::AtomicUsize};
 
+use crate::account::types::Account;
 use futures::{stream, TryStreamExt};
 use time::format_description::well_known::Rfc2822;
 
@@ -71,7 +72,6 @@ impl AsyncLauncher {
         Self { client }
     }
 
-    /// TODO: Cache version manifest
     pub async fn get_version_manifest(
         &self,
         directory: &Path,
@@ -363,9 +363,7 @@ pub fn launch_modern_version(
     directory: &Path,
     asset_root: &Path,
 
-    player_name: &str,
-    auth_uuid: &str,
-    access_token: &str,
+    account: &Account,
     client_id: &str,
     auth_xuid: &str,
 
@@ -416,16 +414,16 @@ pub fn launch_modern_version(
             }
             types::modern::GameElement::String(arg) => {
                 let arg = arg
-                    .replace("${auth_player_name}", player_name)
+                    .replace("${auth_player_name}", &account.profile.name)
                     .replace("${version_name}", &json.id)
                     .replace("${game_directory}", &directory.to_string_lossy())
                     .replace("${assets_root}", &asset_root.to_string_lossy())
                     .replace("${assets_index_name}", &json.asset_index.id)
-                    .replace("${auth_uuid}", auth_uuid)
-                    .replace("${auth_access_token}", access_token)
+                    .replace("${auth_uuid}", &account.profile.id)
+                    .replace("${auth_access_token}", &account.access_token)
                     .replace("${clientid}", client_id)
                     .replace("${auth_xuid}", auth_xuid)
-                    .replace("${user_type}", "demo")
+                    .replace("${user_type}", "msa")
                     .replace("${version_type}", &json.welcome_type);
 
                 process.arg(arg);
