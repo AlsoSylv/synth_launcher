@@ -140,6 +140,7 @@ impl AsyncLauncher {
     ) -> Result<types::AssetIndexJson, Error> {
         let directory = directory.join("indexes");
         let file = directory.join(format!("{}.json", asset_index.id));
+
         if tokio::fs::try_exists(&file).await? {
             let buf = tokio::fs::read(&file).await?;
             let val = serde_json::from_slice(&buf)?;
@@ -147,6 +148,7 @@ impl AsyncLauncher {
         } else {
             let response = self.client.get(&asset_index.url).send().await?;
             let buf = response.bytes().await?;
+
             if !tokio::fs::try_exists(&directory).await? {
                 tokio::fs::create_dir_all(&directory).await?;
             }
@@ -358,6 +360,7 @@ impl AsyncLauncher {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn launch_modern_version(
     json: &types::Modern,
     directory: &Path,
@@ -452,7 +455,7 @@ mod tests {
         let _ = fs::create_dir("./Versions");
         for version in manifest.versions.iter() {
             if let Err(err) = launcher
-                .get_version_json(version, &Path::new("./Versions"))
+                .get_version_json(version, Path::new("./Versions"))
                 .await
             {
                 println!("{}", version.id);
@@ -470,17 +473,17 @@ mod tests {
             .unwrap();
         fs::create_dir("./Assets").unwrap();
         if let Ok(VersionJson::Modern(version)) = launcher
-            .get_version_json(&manifest.versions[0], &Path::new("./Versions"))
+            .get_version_json(&manifest.versions[0], Path::new("./Versions"))
             .await
         {
             if let Ok(index) = launcher
-                .get_asset_index_json(&version.asset_index, &Path::new("./Assets"))
+                .get_asset_index_json(&version.asset_index, Path::new("./Assets"))
                 .await
             {
                 if let Err(err) = launcher
                     .download_and_store_asset_index(
                         &index,
-                        &Path::new("./Assets"),
+                        Path::new("./Assets"),
                         &AtomicUsize::new(0),
                         &AtomicUsize::new(0),
                     )
@@ -502,7 +505,7 @@ mod tests {
         fs::create_dir("./Libs").unwrap();
         for version in &manifest.versions {
             let libs = match launcher
-                .get_version_json(version, &Path::new("./Versions"))
+                .get_version_json(version, Path::new("./Versions"))
                 .await
             {
                 Ok(version) => version.libraries().clone(),
@@ -512,14 +515,13 @@ mod tests {
             launcher
                 .download_libraries_and_get_path(
                     &libs,
-                    &Path::new("./Libs"),
+                    Path::new("./Libs"),
                     &AtomicUsize::new(0),
                     &AtomicUsize::new(0),
                 )
                 .await
                 .unwrap();
             // println!("{}", path);
-            break;
         }
         fs::remove_dir_all("./Libs").unwrap();
     }

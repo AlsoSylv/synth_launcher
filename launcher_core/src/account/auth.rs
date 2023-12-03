@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use crate::account::types::{ProductCheck, XboxLiveAuthenticationResponse};
 use serde_json::json;
 
 use super::types;
@@ -67,7 +66,7 @@ pub async fn refresh_token_response(
 pub async fn xbox_response(
     client: &reqwest::Client,
     access_token: &str,
-) -> Result<XboxLiveAuthenticationResponse, crate::Error> {
+) -> Result<types::XboxLiveAuthenticationResponse, crate::Error> {
     let val = client
         .post("https://user.auth.xboxlive.com/user/authenticate")
         .json(&json!({
@@ -94,7 +93,7 @@ pub async fn xbox_security_token_response(
     let val = client
         .post("https://xsts.auth.xboxlive.com/xsts/authorize")
         // TODO: Replace with struct
-        .json(&serde_json::json!({
+        .json(&json!({
             "Properties": {
                 "SandboxId": "RETAIL",
                 "UserTokens": [&token]
@@ -146,7 +145,7 @@ pub async fn minecraft_profile_response(
 pub async fn minecraft_ownership_response(
     access_token: &str,
     client: &reqwest::Client,
-) -> Result<ProductCheck, crate::Error> {
+) -> Result<types::ProductCheck, crate::Error> {
     let val = client
         .get("https://api.minecraftservices.com/entitlements/mcstore")
         .bearer_auth(access_token)

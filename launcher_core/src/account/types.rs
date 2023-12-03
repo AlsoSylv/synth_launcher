@@ -111,3 +111,16 @@ pub struct Account {
     pub access_token: String,
     pub profile: Profile,
 }
+
+impl From<RefreshTokenResponse> for AuthorizationTokenResponse {
+    fn from(val: RefreshTokenResponse) -> Self {
+        AuthorizationTokenResponse {
+            expires_in: val.expires_in,
+            refresh_token: val.refresh_token,
+            access_token: val.access_token,
+            ext_expires_in: val.ext_expires_in,
+            scope: val.scope,
+            token_type: val.token_type,
+        }
+    }
+}

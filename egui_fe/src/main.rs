@@ -12,7 +12,7 @@ use launcher_core::account::auth::{
     authorization_token_response, minecraft_ownership_response, minecraft_profile_response,
     minecraft_response, refresh_token_response, xbox_response, xbox_security_token_response,
 };
-use launcher_core::account::types::{Account, AuthorizationTokenResponse};
+use launcher_core::account::types::Account;
 use launcher_core::{
     account::auth::device_response,
     types::{AssetIndex, AssetIndexJson, Library, Version, VersionJson, VersionManifest},
@@ -156,23 +156,8 @@ fn worker_event_loop(
                 Response::Jar(result)
             }
             Message::Auth => {
-                let try_exists = match tokio::fs::try_exists("./refresh.txt").await {
-                    Ok(b) => b,
-                    Err(e) => return Response::Auth(Err(e.into())),
-                };
-
-                if try_exists {
-                    let token = match tokio::fs::read_to_string("./refresh.txt").await {
-                        Ok(b) => b,
-                        Err(e) => return Response::Auth(Err(e.into())),
-                    };
-
-                    print!("{token}");
-
-                    refresh(&client, &token).await
-                } else {
-                    auth(&client, &tx).await
-                }
+                let result = auth_or_refresh(&client, &tx).await;
+                Response::Auth(result)
             }
         }
     }
@@ -180,109 +165,65 @@ fn worker_event_loop(
 
 const CLIENT_ID: &str = "";
 
-async fn refresh(client: &Client, refresh_token: &str) -> Response {
-    let refresh_res = match refresh_token_response(client, refresh_token, CLIENT_ID).await {
-        Ok(t) => t,
-        Err(e) => return Response::Auth(Err(e)),
-    };
+async fn auth_or_refresh(client: &Client, tx: &Sender<EarlyMessage>) -> Result<Account, Error> {
+    let exists = tokio::fs::try_exists("./refresh.txt").await?;
+    let auth_res = if exists {
+        let token = tokio::fs::read_to_string("./refresh.txt").await?;
+        refresh_token_response(client, &token, CLIENT_ID).await?.into()
+    } else {
+        // https://wiki.vg/Microsoft_Authentication_Scheme
 
-    finish(
-        client,
-        refresh_res.expires_in,
-        refresh_res.access_token,
-        refresh_res.refresh_token,
-    )
-    .await
-}
+        let device_response = device_response(client, CLIENT_ID).await?;
 
-async fn auth(client: &Client, tx: &Sender<EarlyMessage>) -> Response {
-    // https://wiki.vg/Microsoft_Authentication_Scheme
+        let code = Arc::new(device_response.user_code);
+        let ms_url = device_response.verification_uri;
 
-    let device_response = match device_response(client, CLIENT_ID).await {
-        Ok(t) => t,
-        Err(e) => return Response::Auth(Err(e)),
-    };
+        tx.send(EarlyMessage::Link(ms_url)).await.unwrap();
+        tx.send(EarlyMessage::Code(code.clone())).await.unwrap();
 
-    let code = Arc::new(device_response.user_code);
-    let ms_url = device_response.verification_uri;
-
-    tx.send(EarlyMessage::Link(ms_url)).await.unwrap();
-    tx.send(EarlyMessage::Code(code.clone())).await.unwrap();
-
-    let auth_res: AuthorizationTokenResponse;
-
-    loop {
-        let device_code = &device_response.device_code;
-        let auth_hook = authorization_token_response(&client, device_code, CLIENT_ID).await;
-        if let Ok(t) = auth_hook {
-            auth_res = t;
-            break;
+        loop {
+            let device_code = &device_response.device_code;
+            let auth_hook = authorization_token_response(client, device_code, CLIENT_ID).await;
+            if let Ok(t) = auth_hook {
+                break t;
+            }
         }
-    }
-
-    finish(
-        client,
-        auth_res.expires_in,
-        auth_res.access_token,
-        auth_res.refresh_token,
-    )
-    .await
-}
-
-async fn finish(client: &Client, expires: u64, token: String, refresh: String) -> Response {
-    let xbox_response = match xbox_response(&client, &token).await {
-        Ok(t) => t,
-        Err(e) => return Response::Auth(Err(e)),
     };
 
-    let xbox_secure_token_res =
-        match xbox_security_token_response(&client, &xbox_response.token).await {
-            Ok(t) => t,
-            Err(e) => return Response::Auth(Err(e)),
-        };
+    let xbox_response = xbox_response(client, &auth_res.access_token).await?;
+
+    let xbox_secure_token_res = xbox_security_token_response(client, &xbox_response.token).await?;
 
     let claims = &xbox_secure_token_res.display_claims;
     let token = &xbox_secure_token_res.token;
-    let mc_res = match minecraft_response(claims, token, &client).await {
-        Ok(t) => t,
-        Err(e) => return Response::Auth(Err(e)),
-    };
+    let mc_res = minecraft_response(claims, token, client).await?;
 
-    let ownership_check = match minecraft_ownership_response(&mc_res.access_token, &client).await {
-        Ok(t) => t,
-        Err(e) => return Response::Auth(Err(e)),
-    };
+    let ownership_check = minecraft_ownership_response(&mc_res.access_token, client).await?;
 
     if ownership_check.items.is_empty() {
         todo!("Is this worth checking?")
     }
 
-    let mc_profile_res = match minecraft_profile_response(&mc_res.access_token, &client).await {
-        Ok(t) => t,
-        Err(e) => return Response::Auth(Err(e)),
-    };
+    let profile = minecraft_profile_response(&mc_res.access_token, client).await?;
 
-    if let Err(e) = tokio::fs::write("./refresh.txt", &refresh).await {
-        return Response::Auth(Err(e.into()));
-    }
+    tokio::fs::write("./refresh.txt", &auth_res.refresh_token).await?;
 
-    use std::time::*;
+    use std::time::{Duration, SystemTime};
 
-    let expires_in = Duration::from_secs(expires);
+    let expires_in = Duration::from_secs(auth_res.expires_in);
     let system_time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap();
     let combined_duration = system_time + expires_in;
-    let combined_timestamp = combined_duration.as_secs();
 
     let account = Account {
         active: true,
-        expiry: combined_timestamp,
+        expiry: combined_duration.as_secs(),
         access_token: mc_res.access_token,
-        profile: mc_profile_res,
+        profile,
     };
 
-    Response::Auth(Ok(account))
+    Ok(account)
 }
 
 impl LauncherGui {
@@ -403,7 +344,7 @@ impl LauncherGui {
                     modern,
                     dir,
                     &dir.join("assets"),
-                    &acc,
+                    acc,
                     CLIENT_ID,
                     "0",
                     &dir.join("libraries"),
@@ -448,7 +389,8 @@ impl eframe::App for LauncherGui {
                     let url = self.url.as_ref().unwrap();
                     let code = self.code.as_ref().unwrap();
                     let hyper = egui::Hyperlink::from_label_and_url("Click here to login", url);
-                    let label = Label::new(&**code).sense(Sense::click()).sense(Sense::hover());
+                    let label = Label::new(&**code)
+                        .sense(Sense::click());
                     let label = ui.add(label);
 
                     let label = label.on_hover_ui(|ui| {
@@ -519,15 +461,15 @@ impl eframe::App for LauncherGui {
                     let button = Button::new("Play");
 
                     let enabled = ui.add_enabled(
-                        self.data.version_json.is_some() && !self.data.launching && self.account.is_some(),
+                        self.data.version_json.is_some()
+                            && !self.data.launching
+                            && self.account.is_some(),
                         button,
                     );
 
                     if enabled.clicked() {
                         self.prepare_launch()
                     }
-
-
                 } else {
                     ui.spinner();
                 }
