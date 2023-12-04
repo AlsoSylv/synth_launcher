@@ -1,3 +1,5 @@
+extern crate core;
+
 use std::fmt::Display;
 use std::{path::Path, sync::atomic::AtomicUsize};
 
@@ -228,6 +230,7 @@ impl AsyncLauncher {
         &self,
         libraries: &[types::Library],
         directory: &Path,
+        native_dir: &Path,
         total: &AtomicUsize,
         finished: &AtomicUsize,
     ) -> Result<String, Error> {
@@ -265,39 +268,56 @@ impl AsyncLauncher {
             };
 
             let artifact = if let Some(artifact) = &lib.downloads.artifact {
-                artifact
+                (lib.natives.is_some() || lib.extract.is_some(), artifact)
             } else if let Some(classifier) = &library.downloads.classifiers {
                 #[cfg(target_os = "windows")]
-                let option = classifier.natives_windows.as_ref();
-
-                #[cfg(target_os = "macos")]
-                let option = classifier.natives_osx.as_ref();
-
-                #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-                let option = if classifier.natives_linux.is_some() {
-                    classifier.natives_linux.as_ref()
+                let option = if classifier.natives_windows.is_some() {
+                    classifier.natives_windows.as_ref()
+                } else if cfg!(target_arch = "x86_64") {
+                    classifier.natives_windows_64.as_ref()
+                } else if cfg!(target_arch = "x86") {
+                    classifier.natives_windows_32.as_ref()
                 } else {
-                    classifier.linux_x86_64.as_ref()
+                    classifier.natives_windows.as_ref()
                 };
 
-                #[cfg(all(target_os = "linux", not(target_arch = "x86_64")))]
-                let option = classifier.natives_linux.as_ref();
+                #[cfg(target_os = "macos")]
+                let option = if classifier.natives_osx.is_some() {
+                    classifier.natives_osx.as_ref()
+                } else {
+                    classifier.natives_macos.as_ref()
+                };
+
+                #[cfg(target_os = "linux")]
+                let option = if classifier.natives_linux.is_some() {
+                    classifier.natives_linux.as_ref()
+                } else if cfg!(target_arch = "x86_64") {
+                    classifier.linux_x86_64.as_ref()
+                } else {
+                    classifier.natives_linux.as_ref()
+                };
 
                 match option {
-                    Some(art) => art,
+                    Some(art) => (true, art),
                     None => return None,
                 }
             } else {
                 unreachable!("Found missing artifact")
             };
 
-            path.extend([dir, "/", &artifact.path, ":"]);
+            #[cfg(not(windows))]
+            path.extend([dir, "/", &artifact.1.path, ":"]);
+
+            #[cfg(windows)]
+            path.extend([dir, "/", &artifact.1.path, ";"]);
 
             total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+            assert_eq!(lib.natives.is_some() || lib.extract.is_some(), artifact.0, "{}", lib.name);
+
             Some(Ok::<_, Error>(artifact))
         }))
-        .try_for_each_concurrent(16, |artifact| {
+        .try_for_each_concurrent(16, |(native, artifact)| {
             let client = self.client.clone();
             let mut sha1 = sha1_smol::Sha1::new();
             let path = directory.join(Path::new(&artifact.path));
@@ -312,6 +332,11 @@ impl AsyncLauncher {
                     sha1.update(&buf);
                     if sha1.digest().to_string() == artifact.sha1 {
                         finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                        if native {
+                            extract_native(native_dir, buf).await?;
+                        }
+
                         return Ok(());
                     } else {
                         tokio::fs::remove_file(&path).await?;
@@ -321,7 +346,14 @@ impl AsyncLauncher {
                 let response = client.get(url).send().await?;
                 let bytes = response.bytes().await?;
                 tokio::fs::create_dir_all(parent).await?;
-                tokio::fs::write(path, bytes).await?;
+
+                if native {
+                    extract_native(native_dir, bytes.to_vec()).await?;
+                    tokio::fs::write(path, bytes).await?;
+                } else {
+                    tokio::fs::write(path, bytes).await?;
+                }
+
                 finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 Ok(())
             }
@@ -360,6 +392,42 @@ impl AsyncLauncher {
     }
 }
 
+async fn extract_native(native_dir: &Path, buf: Vec<u8>) -> Result<(), Error> {
+    if !tokio::fs::try_exists(native_dir).await? {
+        tokio::fs::create_dir_all(native_dir).await?;
+    }
+
+    let reader = async_zip::base::read::mem::ZipFileReader::new(buf).await.unwrap();
+    'outer: for index in 0..reader.file().entries().len() {
+        use tokio_util::compat::FuturesAsyncReadCompatExt;
+
+        let mut entry_reader = reader.reader_without_entry(index).await.unwrap().compat();
+        let entry = reader.file().entries().get(index).unwrap().entry();
+        if entry.dir().unwrap() {
+            continue;
+        } else {
+            let file = entry.filename().as_str().unwrap();
+
+            #[cfg(windows)]
+            let ends_with = ".dll";
+            #[cfg(target_os = "linux")]
+            let ends_with = ".so";
+            #[cfg(target_os = "macos")]
+            let ends_with = ".dylib";
+
+            if !file.ends_with(ends_with) {
+                continue 'outer;
+            }
+
+            let mut buffer = Vec::new();
+            tokio::io::copy(&mut entry_reader, &mut buffer).await?;
+            tokio::fs::write(native_dir.join(file), &buffer).await?;
+        }
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn launch_modern_version(
     json: &types::Modern,
@@ -370,13 +438,13 @@ pub fn launch_modern_version(
     client_id: &str,
     auth_xuid: &str,
 
-    native_directory: &Path,
     launcher_name: &str,
     launcher_version: &str,
     class_path: &str,
 ) {
     let mut process = std::process::Command::new("java");
     let args = &json.arguments;
+    let natives_dir = directory.join("natives");
 
     args.jvm.iter().for_each(|arg| match arg {
         types::modern::JvmElement::JvmClass(class) => {
@@ -399,7 +467,7 @@ pub fn launch_modern_version(
         }
         types::modern::JvmElement::String(arg) => {
             let arg = arg
-                .replace("${natives_directory}", &native_directory.to_string_lossy())
+                .replace("${natives_directory}", &natives_dir.to_string_lossy())
                 .replace("${launcher_name}", launcher_name)
                 .replace("${launcher_version}", launcher_version)
                 .replace("${classpath}", class_path);
@@ -502,7 +570,7 @@ mod tests {
             .get_version_manifest(Path::new("./Versions"))
             .await
             .unwrap();
-        fs::create_dir("./Libs").unwrap();
+        // fs::create_dir("./Libs").unwrap();
         for version in &manifest.versions {
             let libs = match launcher
                 .get_version_json(version, Path::new("./Versions"))
@@ -512,15 +580,17 @@ mod tests {
                 Err(err) => panic!("How {err:?}"),
             };
             // println!("{:?}", version.id);
-            launcher
+            if let Err(e) = launcher
                 .download_libraries_and_get_path(
                     &libs,
                     Path::new("./Libs"),
+                    Path::new("./natives"),
                     &AtomicUsize::new(0),
                     &AtomicUsize::new(0),
                 )
-                .await
-                .unwrap();
+                .await {
+                println!("{} {e:?}", version.id)
+            };
             // println!("{}", path);
         }
         fs::remove_dir_all("./Libs").unwrap();

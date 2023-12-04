@@ -26,7 +26,7 @@ struct LauncherGui {
     current_error: Option<Error>,
     account: Option<Account>,
     url: Option<String>,
-    code: Option<Arc<String>>,
+    code: Option<String>,
     rx: async_channel::Receiver<EarlyMessage>,
 }
 
@@ -100,8 +100,7 @@ struct State {
 }
 
 enum EarlyMessage {
-    Link(String),
-    Code(Arc<String>),
+    LinkCode((String, String)),
 }
 
 fn worker_event_loop(
@@ -131,6 +130,7 @@ fn worker_event_loop(
                     .download_libraries_and_get_path(
                         &libs,
                         &path.join("libraries"),
+                        &path.join("natives"),
                         &total,
                         &finished,
                     )
@@ -163,23 +163,26 @@ fn worker_event_loop(
     }
 }
 
-const CLIENT_ID: &str = "";
+const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
 
 async fn auth_or_refresh(client: &Client, tx: &Sender<EarlyMessage>) -> Result<Account, Error> {
     let exists = tokio::fs::try_exists("./refresh.txt").await?;
     let auth_res = if exists {
         let token = tokio::fs::read_to_string("./refresh.txt").await?;
-        refresh_token_response(client, &token, CLIENT_ID).await?.into()
+        refresh_token_response(client, &token, CLIENT_ID)
+            .await?
+            .into()
     } else {
         // https://wiki.vg/Microsoft_Authentication_Scheme
 
         let device_response = device_response(client, CLIENT_ID).await?;
 
-        let code = Arc::new(device_response.user_code);
+        let code = device_response.user_code;
         let ms_url = device_response.verification_uri;
 
-        tx.send(EarlyMessage::Link(ms_url)).await.unwrap();
-        tx.send(EarlyMessage::Code(code.clone())).await.unwrap();
+        tx.send(EarlyMessage::LinkCode((ms_url, code)))
+            .await
+            .unwrap();
 
         loop {
             let device_code = &device_response.device_code;
@@ -333,11 +336,12 @@ impl LauncherGui {
         if self.data.libraries && self.data.assets && self.data.jar && self.data.launching {
             self.data.launching = false;
             self.data.class_path.push_str(&self.data.jar_path);
+
             let json = self.data.version_json.as_ref().unwrap();
+            let acc = self.account.as_ref().unwrap();
+
             let dir = Path::new("./");
             let class_path = &self.data.class_path;
-
-            let acc = self.account.as_ref().unwrap();
 
             match json.as_ref() {
                 VersionJson::Modern(modern) => launcher_core::launch_modern_version(
@@ -347,7 +351,6 @@ impl LauncherGui {
                     acc,
                     CLIENT_ID,
                     "0",
-                    &dir.join("libraries"),
                     "Cynth Launcher",
                     "0.1.0",
                     class_path,
@@ -377,20 +380,9 @@ impl eframe::App for LauncherGui {
 
         if self.account.is_none() {
             egui::Window::new("Login").auto_sized().show(ctx, |ui| {
-                if self.url.is_none() || self.code.is_none() {
-                    ui.label("Loading code and url, please wait...");
-                    if let Ok(val) = self.rx.try_recv() {
-                        match val {
-                            EarlyMessage::Link(url) => self.url = Some(url),
-                            EarlyMessage::Code(code) => self.code = Some(code),
-                        }
-                    }
-                } else {
-                    let url = self.url.as_ref().unwrap();
-                    let code = self.code.as_ref().unwrap();
+                if let (Some(url), Some(code)) = (&self.url, &self.code) {
                     let hyper = egui::Hyperlink::from_label_and_url("Click here to login", url);
-                    let label = Label::new(&**code)
-                        .sense(Sense::click());
+                    let label = Label::new(code).sense(Sense::click());
                     let label = ui.add(label);
 
                     let label = label.on_hover_ui(|ui| {
@@ -401,6 +393,16 @@ impl eframe::App for LauncherGui {
                         ctx.copy_text(code.to_string());
                     }
                     ui.add(hyper);
+                } else {
+                    ui.label("Loading code and url, please wait...");
+                    if let Ok(val) = self.rx.try_recv() {
+                        match val {
+                            EarlyMessage::LinkCode((url, code)) => {
+                                self.code = Some(code);
+                                self.url = Some(url);
+                            }
+                        }
+                    }
                 }
             });
         }
