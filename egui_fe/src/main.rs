@@ -343,22 +343,17 @@ impl LauncherGui {
             let dir = Path::new("./");
             let class_path = &self.data.class_path;
 
-            match json.as_ref() {
-                VersionJson::Modern(modern) => launcher_core::launch_modern_version(
-                    modern,
-                    dir,
-                    &dir.join("assets"),
-                    acc,
-                    CLIENT_ID,
-                    "0",
-                    "Cynth Launcher",
-                    "0.1.0",
-                    class_path,
-                ),
-                VersionJson::Legacy(_) => {
-                    todo!("There is no function for launching legacy versions yet")
-                }
-            };
+            launcher_core::launch_game(
+                json,
+                &dir,
+                &dir.join("assets"),
+                acc,
+                CLIENT_ID,
+                "0",
+                "Cynth Launcher",
+                "0.1.0",
+                class_path,
+            );
         }
     }
 }

@@ -79,6 +79,20 @@ impl VersionJson {
             VersionJson::Legacy(json) => &json.asset_index,
         }
     }
+
+    pub fn release_type(&self) -> &str {
+        match self {
+            VersionJson::Modern(json) => &json.welcome_type,
+            VersionJson::Legacy(json) => &json.welcome_type,
+        }
+    }
+
+    pub fn main_class(&self) -> &str {
+        match self {
+            VersionJson::Modern(json) => &json.main_class,
+            VersionJson::Legacy(json) => &json.main_class,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -171,6 +185,7 @@ pub struct Artifact {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssetIndexJson {
+    pub map_to_resources: Option<bool>,
     pub objects: std::collections::HashMap<String, Object>,
 }
 

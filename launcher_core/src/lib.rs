@@ -236,6 +236,8 @@ impl AsyncLauncher {
     ) -> Result<String, Error> {
         let mut path = String::new();
 
+        println!("{libraries:?}");
+
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
 
         stream::iter(libraries.iter().filter_map(|library| {
@@ -245,10 +247,14 @@ impl AsyncLauncher {
             if let Some(rules) = &library.rules {
                 for rule in rules {
                     if let Some(os) = &rule.os {
-                        if os.name == OS && rule.action == types::Action::Allow {
-                            lib = Some(library);
+                        if os.name == OS {
+                            if rule.action == types::Action::Allow {
+                                lib = Some(library);
+                            } else {
+                                return None;
+                            }
                         } else {
-                            return None;
+                            continue
                         }
                     } else if rule.action == types::Action::Allow {
                         lib = Some(library);
@@ -266,6 +272,10 @@ impl AsyncLauncher {
             let Some(lib) = lib else {
                 return None;
             };
+
+            if lib.name == "org.lwjgl.lwjgl:lwjgl-platform:2.9.0" {
+                println!("H");
+            }
 
             let artifact = if let Some(artifact) = &lib.downloads.artifact {
                 (lib.natives.is_some() || lib.extract.is_some(), artifact)
@@ -313,7 +323,12 @@ impl AsyncLauncher {
 
             total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-            assert_eq!(lib.natives.is_some() || lib.extract.is_some(), artifact.0, "{}", lib.name);
+            assert_eq!(
+                lib.natives.is_some() || lib.extract.is_some(),
+                artifact.0,
+                "{}",
+                lib.name
+            );
 
             Some(Ok::<_, Error>(artifact))
         }))
@@ -397,7 +412,9 @@ async fn extract_native(native_dir: &Path, buf: Vec<u8>) -> Result<(), Error> {
         tokio::fs::create_dir_all(native_dir).await?;
     }
 
-    let reader = async_zip::base::read::mem::ZipFileReader::new(buf).await.unwrap();
+    let reader = async_zip::base::read::mem::ZipFileReader::new(buf)
+        .await
+        .unwrap();
     'outer: for index in 0..reader.file().entries().len() {
         use tokio_util::compat::FuturesAsyncReadCompatExt;
 
@@ -429,8 +446,8 @@ async fn extract_native(native_dir: &Path, buf: Vec<u8>) -> Result<(), Error> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn launch_modern_version(
-    json: &types::Modern,
+pub fn launch_game(
+    json: &types::VersionJson,
     directory: &Path,
     asset_root: &Path,
 
@@ -443,66 +460,124 @@ pub fn launch_modern_version(
     class_path: &str,
 ) {
     let mut process = std::process::Command::new("java");
-    let args = &json.arguments;
     let natives_dir = directory.join("natives");
 
-    args.jvm.iter().for_each(|arg| match arg {
-        types::modern::JvmElement::JvmClass(class) => {
-            class.rules.iter().for_each(|rule| {
-                if let Some(os) = &rule.os.name {
-                    if rule.action == types::Action::Allow && os == OS {
-                        match &class.value {
-                            types::modern::Value::String(arg) => {
-                                process.arg(arg);
-                            }
-                            types::modern::Value::StringArray(args) => {
-                                for arg in args {
-                                    process.arg(arg);
+    match json {
+        types::VersionJson::Modern(modern) => {
+            let args = &modern.arguments;
+            args.jvm.iter().for_each(|arg| match arg {
+                types::modern::JvmElement::JvmClass(class) => {
+                    class.rules.iter().for_each(|rule| {
+                        if let Some(os) = &rule.os.name {
+                            if rule.action == types::Action::Allow && os == OS {
+                                match &class.value {
+                                    types::modern::Value::String(arg) => {
+                                        process.arg(arg);
+                                    }
+                                    types::modern::Value::StringArray(args) => {
+                                        for arg in args {
+                                            process.arg(arg);
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
+                    });
+                }
+                types::modern::JvmElement::String(arg) => {
+                    let arg = arg
+                        .replace("${natives_directory}", &natives_dir.to_string_lossy())
+                        .replace("${launcher_name}", launcher_name)
+                        .replace("${launcher_version}", launcher_version)
+                        .replace("${classpath}", class_path);
+
+                    process.arg(arg);
                 }
             });
-        }
-        types::modern::JvmElement::String(arg) => {
-            let arg = arg
-                .replace("${natives_directory}", &natives_dir.to_string_lossy())
-                .replace("${launcher_name}", launcher_name)
-                .replace("${launcher_version}", launcher_version)
-                .replace("${classpath}", class_path);
 
-            process.arg(arg);
-        }
-    });
+            process.arg(json.main_class());
 
-    process.arg(&json.main_class);
+            for arg in &args.game {
+                match &arg {
+                    types::modern::GameElement::GameClass(_) => {
+                        // This is left empty, as I have not setup support for any of the features here
+                    }
+                    types::modern::GameElement::String(arg) => {
+                        let arg = apply_mc_args(
+                            arg, json, directory, asset_root, account, client_id, auth_xuid,
+                        );
 
-    for arg in &args.game {
-        match arg {
-            types::modern::GameElement::GameClass(_) => {
-                // This is left empty, as I have not setup support for any of the features here
+                        process.arg(arg);
+                    }
+                }
             }
-            types::modern::GameElement::String(arg) => {
+        }
+        types::VersionJson::Legacy(legacy) => {
+            let jvm_args = [
+                "-Djava.library.path=${natives_directory}",
+                "-Djna.tmpdir=${natives_directory}",
+                "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}",
+                "-Dio.netty.native.workdir=${natives_directory}",
+                "-Dminecraft.launcher.brand=${launcher_name}",
+                "-Dminecraft.launcher.version=${launcher_version}",
+                "-cp",
+                "${classpath}",
+            ].map(String::from);
+
+            for arg in jvm_args {
                 let arg = arg
-                    .replace("${auth_player_name}", &account.profile.name)
-                    .replace("${version_name}", &json.id)
-                    .replace("${game_directory}", &directory.to_string_lossy())
-                    .replace("${assets_root}", &asset_root.to_string_lossy())
-                    .replace("${assets_index_name}", &json.asset_index.id)
-                    .replace("${auth_uuid}", &account.profile.id)
-                    .replace("${auth_access_token}", &account.access_token)
-                    .replace("${clientid}", client_id)
-                    .replace("${auth_xuid}", auth_xuid)
-                    .replace("${user_type}", "msa")
-                    .replace("${version_type}", &json.welcome_type);
+                    .replace("${natives_directory}", &natives_dir.to_string_lossy())
+                    .replace("${launcher_name}", launcher_name)
+                    .replace("${launcher_version}", launcher_version)
+                    .replace("${classpath}", class_path);
 
                 process.arg(arg);
+            }
+
+            process.arg(&legacy.main_class);
+
+            let args: Vec<&str> = legacy.minecraft_arguments.split(' ').collect();
+            for arg in &args {
+                let arg = apply_mc_args(
+                    arg, json, directory, asset_root, account, client_id, auth_xuid,
+                );
+                process.arg(arg);
+
             }
         }
     }
 
+    println!("{:?}", process.get_args());
+
+    std::process::Command::new("java").arg("-version").spawn().unwrap();
     process.spawn().unwrap();
+}
+
+fn apply_mc_args(
+    string: &str,
+    json: &types::VersionJson,
+    directory: &Path,
+    asset_root: &Path,
+
+    account: &Account,
+    client_id: &str,
+    auth_xuid: &str,
+) -> String {
+    string
+        .replace("${auth_player_name}", &account.profile.name)
+        .replace("${version_name}", json.id())
+        .replace("${game_directory}", &directory.to_string_lossy())
+        .replace("${assets_root}", &asset_root.to_string_lossy())
+        .replace("${game_assets}", &asset_root.to_string_lossy())
+        .replace("${assets_index_name}", &json.asset_index().id)
+        .replace("${auth_uuid}", &account.profile.id)
+        .replace("${auth_access_token}", &account.access_token)
+        .replace("${auth_session}", &account.access_token)
+        .replace("${clientid}", client_id)
+        .replace("${auth_xuid}", auth_xuid)
+        .replace("${user_properties}", "{}")
+        .replace("${user_type}", "msa")
+        .replace("${version_type}", json.release_type())
 }
 
 #[cfg(test)]
@@ -588,7 +663,8 @@ mod tests {
                     &AtomicUsize::new(0),
                     &AtomicUsize::new(0),
                 )
-                .await {
+                .await
+            {
                 println!("{} {e:?}", version.id)
             };
             // println!("{}", path);
