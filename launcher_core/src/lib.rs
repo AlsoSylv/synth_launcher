@@ -235,10 +235,8 @@ impl AsyncLauncher {
         finished: &AtomicUsize,
     ) -> Result<String, Error> {
         let mut path = String::new();
-
-        println!("{libraries:?}");
-
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
+        total.store(0, std::sync::atomic::Ordering::Relaxed);
 
         stream::iter(libraries.iter().filter_map(|library| {
             let dir = directory.to_str().unwrap();
@@ -273,13 +271,7 @@ impl AsyncLauncher {
                 return None;
             };
 
-            if lib.name == "org.lwjgl.lwjgl:lwjgl-platform:2.9.0" {
-                println!("H");
-            }
-
-            let artifact = if let Some(artifact) = &lib.downloads.artifact {
-                (lib.natives.is_some() || lib.extract.is_some(), artifact)
-            } else if let Some(classifier) = &library.downloads.classifiers {
+            let artifact = if let Some(classifier) = &library.downloads.classifiers {
                 #[cfg(target_os = "windows")]
                 let option = if classifier.natives_windows.is_some() {
                     classifier.natives_windows.as_ref()
@@ -311,7 +303,9 @@ impl AsyncLauncher {
                     Some(art) => (true, art),
                     None => return None,
                 }
-            } else {
+            } else if let Some(artifact) = &lib.downloads.artifact {
+                (lib.natives.is_some() || lib.extract.is_some(), artifact)
+            } else  {
                 unreachable!("Found missing artifact")
             };
 
