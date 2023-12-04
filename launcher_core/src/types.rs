@@ -14,7 +14,7 @@ pub struct Latest {
     pub snapshot: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Version {
     pub id: String,
@@ -25,7 +25,7 @@ pub struct Version {
     pub release_time: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Type {
     OldAlpha,

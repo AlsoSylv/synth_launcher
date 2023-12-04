@@ -97,7 +97,9 @@ impl AsyncLauncher {
                 let buf = tokio::fs::read(file).await?;
                 return Ok(serde_json::from_slice(&buf)?);
             }
-        } else if !tokio::fs::try_exists(directory).await? {
+        }
+
+        if !tokio::fs::try_exists(directory).await? {
             tokio::fs::create_dir_all(directory).await?;
         }
 
@@ -144,22 +146,27 @@ impl AsyncLauncher {
         let file = directory.join(format!("{}.json", asset_index.id));
 
         if tokio::fs::try_exists(&file).await? {
+            let mut sha1 = sha1_smol::Sha1::new();
             let buf = tokio::fs::read(&file).await?;
-            let val = serde_json::from_slice(&buf)?;
-            Ok(val)
-        } else {
-            let response = self.client.get(&asset_index.url).send().await?;
-            let buf = response.bytes().await?;
 
-            if !tokio::fs::try_exists(&directory).await? {
-                tokio::fs::create_dir_all(&directory).await?;
+            sha1.update(&buf);
+
+            if sha1.digest().to_string() == asset_index.sha1 {
+                let val = serde_json::from_slice(&buf)?;
+                return Ok(val);
             }
-
-            tokio::fs::write(file, &buf).await?;
-
-            let val = serde_json::from_slice(&buf)?;
-            Ok(val)
         }
+        let response = self.client.get(&asset_index.url).send().await?;
+        let buf = response.bytes().await?;
+
+        if !tokio::fs::try_exists(&directory).await? {
+            tokio::fs::create_dir_all(&directory).await?;
+        }
+
+        tokio::fs::write(file, &buf).await?;
+
+        let val = serde_json::from_slice(&buf)?;
+        Ok(val)
     }
 
     /// This expects a top level path, ie: "./Assets", and will append /objects/ to the end to store them
@@ -176,7 +183,6 @@ impl AsyncLauncher {
             asset_index.objects.len(),
             std::sync::atomic::Ordering::Relaxed,
         );
-
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
 
         let object_path = directory.join("objects");
@@ -252,7 +258,7 @@ impl AsyncLauncher {
                                 return None;
                             }
                         } else {
-                            continue
+                            continue;
                         }
                     } else if rule.action == types::Action::Allow {
                         lib = Some(library);
@@ -304,8 +310,8 @@ impl AsyncLauncher {
                     None => return None,
                 }
             } else if let Some(artifact) = &lib.downloads.artifact {
-                (lib.natives.is_some() || lib.extract.is_some(), artifact)
-            } else  {
+                (false, artifact)
+            } else {
                 unreachable!("Found missing artifact")
             };
 
@@ -315,18 +321,11 @@ impl AsyncLauncher {
             #[cfg(windows)]
             path.extend([dir, "/", &artifact.1.path, ";"]);
 
-            total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-            assert_eq!(
-                lib.natives.is_some() || lib.extract.is_some(),
-                artifact.0,
-                "{}",
-                lib.name
-            );
-
             Some(Ok::<_, Error>(artifact))
         }))
         .try_for_each_concurrent(16, |(native, artifact)| {
+            total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
             let client = self.client.clone();
             let mut sha1 = sha1_smol::Sha1::new();
             let path = directory.join(Path::new(&artifact.path));
@@ -409,10 +408,10 @@ async fn extract_native(native_dir: &Path, buf: Vec<u8>) -> Result<(), Error> {
     let reader = async_zip::base::read::mem::ZipFileReader::new(buf)
         .await
         .unwrap();
-    'outer: for index in 0..reader.file().entries().len() {
+    for index in 0..reader.file().entries().len() {
         use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-        let mut entry_reader = reader.reader_without_entry(index).await.unwrap().compat();
+        let mut entry_reader = reader.reader_with_entry(index).await.unwrap().compat();
         let entry = reader.file().entries().get(index).unwrap().entry();
         if entry.dir().unwrap() {
             continue;
@@ -427,7 +426,7 @@ async fn extract_native(native_dir: &Path, buf: Vec<u8>) -> Result<(), Error> {
             let ends_with = ".dylib";
 
             if !file.ends_with(ends_with) {
-                continue 'outer;
+                continue;
             }
 
             let mut buffer = Vec::new();
@@ -441,6 +440,7 @@ async fn extract_native(native_dir: &Path, buf: Vec<u8>) -> Result<(), Error> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn launch_game(
+    java_path: &str,
     json: &types::VersionJson,
     directory: &Path,
     asset_root: &Path,
@@ -453,7 +453,7 @@ pub fn launch_game(
     launcher_version: &str,
     class_path: &str,
 ) {
-    let mut process = std::process::Command::new("java");
+    let mut process = std::process::Command::new(java_path);
     let natives_dir = directory.join("natives");
 
     match json {
@@ -516,7 +516,8 @@ pub fn launch_game(
                 "-Dminecraft.launcher.version=${launcher_version}",
                 "-cp",
                 "${classpath}",
-            ].map(String::from);
+            ]
+            .map(String::from);
 
             for arg in jvm_args {
                 let arg = arg
@@ -536,14 +537,14 @@ pub fn launch_game(
                     arg, json, directory, asset_root, account, client_id, auth_xuid,
                 );
                 process.arg(arg);
-
             }
         }
     }
 
-    println!("{:?}", process.get_args());
-
-    std::process::Command::new("java").arg("-version").spawn().unwrap();
+    std::process::Command::new("java")
+        .arg("-version")
+        .spawn()
+        .unwrap();
     process.spawn().unwrap();
 }
 

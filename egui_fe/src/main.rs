@@ -32,14 +32,14 @@ struct LauncherGui {
 
 struct MCData {
     versions: Option<VersionManifest>,
-    selected_version: Option<usize>,
+    selected_version: usize,
     version_json: Option<Arc<VersionJson>>,
     asset_index: Option<Arc<AssetIndexJson>>,
     total_libraries: Arc<AtomicUsize>,
     finished_libraries: Arc<AtomicUsize>,
     total_assets: Arc<AtomicUsize>,
     finished_assets: Arc<AtomicUsize>,
-    class_path: String,
+    class_path: Option<String>,
     jar_path: String,
     json_start: bool,
     versions_task_started: bool,
@@ -53,7 +53,7 @@ impl Default for MCData {
     fn default() -> Self {
         Self {
             versions: None,
-            selected_version: None,
+            selected_version: usize::MAX,
             version_json: None,
             asset_index: None,
             total_libraries: Default::default(),
@@ -75,20 +75,30 @@ impl Default for MCData {
 enum Message {
     Versions,
     Version(Arc<Version>),
-    AssetIndex(Arc<AssetIndex>),
-    Libraries(Arc<[Library]>, Arc<AtomicUsize>, Arc<AtomicUsize>),
-    Assets(Arc<AssetIndexJson>, Arc<AtomicUsize>, Arc<AtomicUsize>),
-    Jar(Arc<VersionJson>),
+    AssetIndex(Arc<AssetIndex>, Arc<Version>),
+    Libraries(
+        Arc<[Library]>,
+        Arc<AtomicUsize>,
+        Arc<AtomicUsize>,
+        Arc<Version>,
+    ),
+    Assets(
+        Arc<AssetIndexJson>,
+        Arc<AtomicUsize>,
+        Arc<AtomicUsize>,
+        Arc<Version>,
+    ),
+    Jar(Arc<VersionJson>, Arc<Version>),
     Auth,
 }
 
 enum Response {
     Versions(Result<VersionManifest, Error>),
     Version(Result<Box<VersionJson>, Error>),
-    Libraries(Result<String, Error>),
-    AssetIndex(Result<AssetIndexJson, Error>),
-    Asset(Result<(), Error>),
-    Jar(Result<String, Error>),
+    Libraries(Result<String, Error>, Arc<Version>),
+    AssetIndex(Result<AssetIndexJson, Error>, Arc<Version>),
+    Asset(Result<(), Error>, Arc<Version>),
+    Jar(Result<String, Error>, Arc<Version>),
     Auth(Result<Account, Error>),
 }
 
@@ -125,7 +135,7 @@ fn worker_event_loop(
                     .await;
                 Response::Version(json.map(Box::new))
             }
-            Message::Libraries(libs, total, finished) => {
+            Message::Libraries(libs, total, finished, tag) => {
                 let path = launcher_core
                     .download_libraries_and_get_path(
                         &libs,
@@ -135,25 +145,25 @@ fn worker_event_loop(
                         &finished,
                     )
                     .await;
-                Response::Libraries(path)
+                Response::Libraries(path, tag)
             }
-            Message::AssetIndex(asset_index) => {
+            Message::AssetIndex(asset_index, tag) => {
                 let index = launcher_core
                     .get_asset_index_json(&asset_index, &path.join("assets"))
                     .await;
-                Response::AssetIndex(index)
+                Response::AssetIndex(index, tag)
             }
-            Message::Assets(index, total, finished) => {
+            Message::Assets(index, total, finished, tag) => {
                 let result = launcher_core
                     .download_and_store_asset_index(&index, &path.join("assets"), &total, &finished)
                     .await;
-                Response::Asset(result)
+                Response::Asset(result, tag)
             }
-            Message::Jar(json) => {
+            Message::Jar(json, tag) => {
                 let result = launcher_core
                     .download_jar(&json, &path.join("versions"))
                     .await;
-                Response::Jar(result)
+                Response::Jar(result, tag)
             }
             Message::Auth => {
                 let result = auth_or_refresh(&client, &tx).await;
@@ -276,35 +286,54 @@ impl LauncherGui {
                     Ok(json) => self.data.version_json = Some(json.into()),
                     Err(err) => self.current_error = Some(err),
                 },
-                Response::Libraries(result) => match result {
+                Response::Libraries(result, tag) => match result {
                     Ok(path) => {
-                        self.data.libraries = true;
-                        self.data.class_path = path;
+                        let versions = &self.data.versions.as_ref().unwrap();
+                        if versions.versions[self.data.selected_version] == tag
+                        {
+                            self.data.libraries = true;
+                            self.data.class_path = Some(path);
+                        }
                     }
                     Err(err) => self.current_error = Some(err),
                 },
-                Response::AssetIndex(idx) => match idx {
+                Response::AssetIndex(idx, tag) => match idx {
                     Ok(json) => {
-                        let index = Arc::new(json);
+                        let versions = &self.data.versions.as_ref().unwrap();
+                        if versions.versions[self.data.selected_version] == tag
+                        {
+                            let index = Arc::new(json);
 
-                        self.rt.send_with_message(Message::Assets(
-                            index.clone(),
-                            self.data.total_assets.clone(),
-                            self.data.finished_assets.clone(),
-                        ));
+                            self.rt.send_with_message(Message::Assets(
+                                index.clone(),
+                                self.data.total_assets.clone(),
+                                self.data.finished_assets.clone(),
+                                tag.clone(),
+                            ));
 
-                        self.data.asset_index = Some(index)
+                            self.data.asset_index = Some(index)
+                        }
                     }
                     Err(err) => self.current_error = Some(err),
                 },
-                Response::Asset(result) => match result {
-                    Ok(()) => self.data.assets = true,
+                Response::Asset(result, tag) => match result {
+                    Ok(()) => {
+                        let versions = &self.data.versions.as_ref().unwrap();
+                        if versions.versions[self.data.selected_version] == tag
+                        {
+                            self.data.assets = true;
+                        }
+                    }
                     Err(err) => self.current_error = Some(err),
                 },
-                Response::Jar(res) => match res {
+                Response::Jar(res, tag) => match res {
                     Ok(jar) => {
-                        self.data.jar = true;
-                        self.data.jar_path = jar;
+                        let versions = &self.data.versions.as_ref().unwrap();
+                        if versions.versions[self.data.selected_version] == tag
+                        {
+                            self.data.jar = true;
+                            self.data.jar_path = jar;
+                        }
                     }
                     Err(err) => self.current_error = Some(err),
                 },
@@ -316,44 +345,45 @@ impl LauncherGui {
         }
     }
 
-    fn prepare_launch(&mut self) {
-        let unwrapped = &self.data.version_json;
-        let version = unwrapped.as_ref().unwrap(); // This button is only enabled if this exists
-        let libraries = version.libraries().clone();
-        let index = version.asset_index().clone();
+    fn prepare_launch(&self, json: &Arc<VersionJson>, manifest: &VersionManifest) {
+        let libraries = json.libraries().clone();
+        let index = json.asset_index().clone();
+        let current = self.data.selected_version;
+        let tag = manifest.versions[current].clone();
 
-        self.rt.send_with_message(Message::AssetIndex(index));
+        self.rt.send_with_message(Message::AssetIndex(index, tag.clone()));
         self.rt.send_with_message(Message::Libraries(
             libraries,
             self.data.total_libraries.clone(),
             self.data.finished_libraries.clone(),
+            tag.clone(),
         ));
-        self.rt.send_with_message(Message::Jar(version.clone()));
-        self.data.launching = true;
+        self.rt
+            .send_with_message(Message::Jar(json.clone(), tag));
     }
 
     fn maybe_launch(&mut self) {
-        if self.data.libraries && self.data.assets && self.data.jar && self.data.launching {
-            self.data.launching = false;
-            self.data.class_path.push_str(&self.data.jar_path);
+        if let (Some(class_path), Some(json), Some(acc)) = (
+            &self.data.class_path,
+            &self.data.version_json,
+            &self.account,
+        ) {
+            if self.data.assets {
+                let dir = Path::new("./");
 
-            let json = self.data.version_json.as_ref().unwrap();
-            let acc = self.account.as_ref().unwrap();
-
-            let dir = Path::new("./");
-            let class_path = &self.data.class_path;
-
-            launcher_core::launch_game(
-                json,
-                &dir,
-                &dir.join("assets"),
-                acc,
-                CLIENT_ID,
-                "0",
-                "Cynth Launcher",
-                "0.1.0",
-                class_path,
-            );
+                launcher_core::launch_game(
+                    "java",
+                    json,
+                    &dir,
+                    &dir.join("assets"),
+                    acc,
+                    CLIENT_ID,
+                    "0",
+                    "Synth Launcher",
+                    "0.1.0",
+                    class_path,
+                );
+            }
         }
     }
 }
@@ -411,7 +441,8 @@ impl eframe::App for LauncherGui {
             .resizable(false)
             .show(ctx, |ui| {
                 if let Some(versions) = &self.data.versions {
-                    let text = if let Some(index) = self.data.selected_version {
+                    let index = self.data.selected_version;
+                    let text = if index != usize::MAX {
                         &versions.versions[index].id
                     } else {
                         "None"
@@ -429,7 +460,7 @@ impl eframe::App for LauncherGui {
                                 .for_each(|(index, version)| {
                                     let button = ui.selectable_value(
                                         &mut self.data.selected_version,
-                                        Some(index),
+                                        index,
                                         &version.id,
                                     );
 
@@ -440,8 +471,8 @@ impl eframe::App for LauncherGui {
                                             }
                                         }
 
-                                        self.data.jar = false;
-                                        self.data.libraries = false;
+                                        self.data.version_json = None;
+                                        self.data.class_path = None;
                                         self.data.assets = false;
 
                                         if self.data.json_start {
@@ -457,15 +488,25 @@ impl eframe::App for LauncherGui {
 
                     let button = Button::new("Play");
 
-                    let enabled = ui.add_enabled(
-                        self.data.version_json.is_some()
-                            && !self.data.launching
-                            && self.account.is_some(),
-                        button,
-                    );
+                    if let Some(version_json) = &self.data.version_json {
+                        let enabled = ui.add_enabled(
+                            true
+                                && !self.data.launching
+                                && self.account.is_some(),
+                            button,
+                        );
 
-                    if enabled.clicked() {
-                        self.prepare_launch()
+                        if enabled.clicked() {
+                            self.prepare_launch(version_json, versions);
+                            self.data.launching = true;
+                        }
+                    } else {
+                        ui.add_enabled(
+                            self.data.version_json.is_some()
+                                && !self.data.launching
+                                && self.account.is_some(),
+                            button,
+                        );
                     }
                 } else {
                     ui.spinner();
