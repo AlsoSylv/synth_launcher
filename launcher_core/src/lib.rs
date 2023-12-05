@@ -96,7 +96,7 @@ impl AsyncLauncher {
             if dt_cdn < dt_mod {
                 let buf = tokio::fs::read(file).await?;
                 return Ok(serde_json::from_slice(&buf)?);
-            }
+            } // TODO: If this is false, it should append to the exist manifest, not replace it
         }
 
         if !tokio::fs::try_exists(directory).await? {

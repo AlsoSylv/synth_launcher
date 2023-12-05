@@ -20,6 +20,14 @@ use launcher_core::{
 };
 use reqwest::Client;
 
+
+// TODO: Move player data into a separate struct
+// TODO: Store encrypted auth token for reuse
+// TODO: Document existing UI functionality
+// TODO: Make vector of accounts, allow account selection
+// TODO: Make instances, must be savable to disk, maybe using RON?
+// TODO: Redo error handling, fields that can error should hold Result<T, E>
+// TODO: Config file/Config tx/rx setup
 struct LauncherGui {
     rt: async_bridge::Runtime<Message, Response, State>,
     data: MCData,
@@ -31,43 +39,59 @@ struct LauncherGui {
 }
 
 struct MCData {
+    // Version Manifest read/write able
     versions: Option<VersionManifest>,
+    // Holds the index in manifest for the current selected version
     selected_version: usize,
+    // Version JSON, read only
     version_json: Option<Arc<VersionJson>>,
+    // Asset Index, read only
     asset_index: Option<Arc<AssetIndexJson>>,
+    // Total and finished libraries, divide as floats
+    // and multiply by 100 to get progress as percentage
     total_libraries: Arc<AtomicUsize>,
     finished_libraries: Arc<AtomicUsize>,
+    // Total and finished assets, divide as floats
+    // and multiply by 100 to get progress as percentage
     total_assets: Arc<AtomicUsize>,
     finished_assets: Arc<AtomicUsize>,
+    // Classpath for the MC jar, also doubles as verifying
+    // That libraries are completely loaded before launch
     class_path: Option<String>,
+    // TODO: Because futures are tagged, this can be moved into classpath
     jar_path: String,
-    json_start: bool,
-    versions_task_started: bool,
+    // Whether the manifest json future is running, only flipped once
+    // But needs to be flipped again if connection fails
+    manifest_started: bool,
+    json_started: bool,
+    // Whether or not all assets are loaded
     assets: bool,
-    libraries: bool,
+    // Whether or not the current MC jar is ready
     jar: bool,
+    // If the launcher is attempting to launch
     launching: bool,
 }
 
 impl Default for MCData {
     fn default() -> Self {
         Self {
-            versions: None,
+            versions: Default::default(),
+            // Defaults to usize::MAX because it avoids unwraps
+            // in places that are disabled if no version is selected
             selected_version: usize::MAX,
-            version_json: None,
-            asset_index: None,
+            version_json: Default::default(),
+            asset_index: Default::default(),
             total_libraries: Default::default(),
             finished_libraries: Default::default(),
             total_assets: Default::default(),
             finished_assets: Default::default(),
             class_path: Default::default(),
             jar_path: Default::default(),
-            json_start: true,
-            versions_task_started: false,
-            assets: false,
-            libraries: false,
-            jar: false,
-            launching: false,
+            json_started: Default::default(),
+            manifest_started: Default::default(),
+            assets: Default::default(),
+            jar: Default::default(),
+            launching: Default::default(),
         }
     }
 }
@@ -289,9 +313,7 @@ impl LauncherGui {
                 Response::Libraries(result, tag) => match result {
                     Ok(path) => {
                         let versions = &self.data.versions.as_ref().unwrap();
-                        if versions.versions[self.data.selected_version] == tag
-                        {
-                            self.data.libraries = true;
+                        if versions.versions[self.data.selected_version] == tag {
                             self.data.class_path = Some(path);
                         }
                     }
@@ -300,8 +322,7 @@ impl LauncherGui {
                 Response::AssetIndex(idx, tag) => match idx {
                     Ok(json) => {
                         let versions = &self.data.versions.as_ref().unwrap();
-                        if versions.versions[self.data.selected_version] == tag
-                        {
+                        if versions.versions[self.data.selected_version] == tag {
                             let index = Arc::new(json);
 
                             self.rt.send_with_message(Message::Assets(
@@ -319,8 +340,7 @@ impl LauncherGui {
                 Response::Asset(result, tag) => match result {
                     Ok(()) => {
                         let versions = &self.data.versions.as_ref().unwrap();
-                        if versions.versions[self.data.selected_version] == tag
-                        {
+                        if versions.versions[self.data.selected_version] == tag {
                             self.data.assets = true;
                         }
                     }
@@ -329,8 +349,7 @@ impl LauncherGui {
                 Response::Jar(res, tag) => match res {
                     Ok(jar) => {
                         let versions = &self.data.versions.as_ref().unwrap();
-                        if versions.versions[self.data.selected_version] == tag
-                        {
+                        if versions.versions[self.data.selected_version] == tag {
                             self.data.jar = true;
                             self.data.jar_path = jar;
                         }
@@ -351,18 +370,18 @@ impl LauncherGui {
         let current = self.data.selected_version;
         let tag = manifest.versions[current].clone();
 
-        self.rt.send_with_message(Message::AssetIndex(index, tag.clone()));
+        self.rt
+            .send_with_message(Message::AssetIndex(index, tag.clone()));
         self.rt.send_with_message(Message::Libraries(
             libraries,
             self.data.total_libraries.clone(),
             self.data.finished_libraries.clone(),
             tag.clone(),
         ));
-        self.rt
-            .send_with_message(Message::Jar(json.clone(), tag));
+        self.rt.send_with_message(Message::Jar(json.clone(), tag));
     }
 
-    fn maybe_launch(&mut self) {
+    fn maybe_launch(&self) -> bool {
         if let (Some(class_path), Some(json), Some(acc)) = (
             &self.data.class_path,
             &self.data.version_json,
@@ -374,7 +393,7 @@ impl LauncherGui {
                 launcher_core::launch_game(
                     "java",
                     json,
-                    &dir,
+                    dir,
                     &dir.join("assets"),
                     acc,
                     CLIENT_ID,
@@ -383,7 +402,12 @@ impl LauncherGui {
                     "0.1.0",
                     class_path,
                 );
+                !self.data.launching
+            } else {
+                self.data.launching
             }
+        } else {
+            self.data.launching
         }
     }
 }
@@ -391,10 +415,10 @@ impl LauncherGui {
 impl eframe::App for LauncherGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.update_state(ctx);
-        if !self.data.versions_task_started {
+        if !self.data.manifest_started {
             self.rt.send_with_message(Message::Auth);
             self.rt.send_with_message(Message::Versions);
-            self.data.versions_task_started = true;
+            self.data.manifest_started = true;
         }
 
         if let Some(error) = &self.current_error {
@@ -467,7 +491,7 @@ impl eframe::App for LauncherGui {
                                     if button.clicked() {
                                         if let Some(json) = &self.data.version_json {
                                             if version.id != json.id() {
-                                                self.data.json_start = true;
+                                                self.data.json_started = false;
                                             }
                                         }
 
@@ -475,8 +499,8 @@ impl eframe::App for LauncherGui {
                                         self.data.class_path = None;
                                         self.data.assets = false;
 
-                                        if self.data.json_start {
-                                            self.data.json_start = false;
+                                        if !self.data.json_started {
+                                            self.data.json_started = true;
 
                                             self.rt.send_with_message(Message::Version(
                                                 version.clone(),
@@ -489,24 +513,15 @@ impl eframe::App for LauncherGui {
                     let button = Button::new("Play");
 
                     if let Some(version_json) = &self.data.version_json {
-                        let enabled = ui.add_enabled(
-                            true
-                                && !self.data.launching
-                                && self.account.is_some(),
-                            button,
-                        );
+                        let enabled =
+                            ui.add_enabled(!self.data.launching && self.account.is_some(), button);
 
                         if enabled.clicked() {
                             self.prepare_launch(version_json, versions);
                             self.data.launching = true;
                         }
                     } else {
-                        ui.add_enabled(
-                            self.data.version_json.is_some()
-                                && !self.data.launching
-                                && self.account.is_some(),
-                            button,
-                        );
+                        ui.add_enabled(false, button);
                     }
                 } else {
                     ui.spinner();
@@ -519,16 +534,19 @@ impl eframe::App for LauncherGui {
 
             ui.set_style(style);
 
-            let total = self.data.total_libraries.load(Ordering::Relaxed);
-            let finished = self.data.finished_libraries.load(Ordering::Relaxed);
+            if self.data.launching {
+                egui::Window::new("Progress").auto_sized().show(ctx, |ui| {
+                    let total = self.data.total_libraries.load(Ordering::Relaxed);
+                    let finished = self.data.finished_libraries.load(Ordering::Relaxed);
+                    ui.label(format!("Library Progress: {:.2} %", (finished as f64 / total as f64) * 100.0));
 
-            if total == 0 {
-                ui.label("0 %");
-            } else {
-                ui.label(format!("{:.2} %", (finished as f64 / total as f64) * 100.0));
+                    let total = self.data.total_assets.load(Ordering::Relaxed);
+                    let finished = self.data.finished_assets.load(Ordering::Relaxed);
+                    ui.label(format!("Asset Progress: {:.2} %", (finished as f64 / total as f64) * 100.0));
+                });
             }
 
-            self.maybe_launch();
+            self.data.launching = self.maybe_launch();
         });
     }
 }
