@@ -20,7 +20,6 @@ use launcher_core::{
 };
 use reqwest::Client;
 
-
 // TODO: Move player data into a separate struct
 // TODO: Store encrypted auth token for reuse
 // TODO: Document existing UI functionality
@@ -38,6 +37,7 @@ struct LauncherGui {
     rx: async_channel::Receiver<EarlyMessage>,
 }
 
+#[derive(Default)]
 struct MCData {
     // Version Manifest read/write able
     versions: Option<VersionManifest>,
@@ -55,10 +55,13 @@ struct MCData {
     // and multiply by 100 to get progress as percentage
     total_assets: Arc<AtomicUsize>,
     finished_assets: Arc<AtomicUsize>,
+    // Total progress downloading the MC jar
+    total_jar: Arc<AtomicUsize>,
+    finished_jar: Arc<AtomicUsize>,
     // Classpath for the MC jar, also doubles as verifying
     // That libraries are completely loaded before launch
     class_path: Option<String>,
-    // TODO: Because futures are tagged, this can be moved into classpath
+    // The jar path, stored separate because futures are not ordered
     jar_path: String,
     // Whether the manifest json future is running, only flipped once
     // But needs to be flipped again if connection fails
@@ -70,30 +73,6 @@ struct MCData {
     jar: bool,
     // If the launcher is attempting to launch
     launching: bool,
-}
-
-impl Default for MCData {
-    fn default() -> Self {
-        Self {
-            versions: Default::default(),
-            // Defaults to usize::MAX because it avoids unwraps
-            // in places that are disabled if no version is selected
-            selected_version: usize::MAX,
-            version_json: Default::default(),
-            asset_index: Default::default(),
-            total_libraries: Default::default(),
-            finished_libraries: Default::default(),
-            total_assets: Default::default(),
-            finished_assets: Default::default(),
-            class_path: Default::default(),
-            jar_path: Default::default(),
-            json_started: Default::default(),
-            manifest_started: Default::default(),
-            assets: Default::default(),
-            jar: Default::default(),
-            launching: Default::default(),
-        }
-    }
 }
 
 enum Message {
@@ -112,7 +91,12 @@ enum Message {
         Arc<AtomicUsize>,
         Arc<Version>,
     ),
-    Jar(Arc<VersionJson>, Arc<Version>),
+    Jar(
+        Arc<VersionJson>,
+        Arc<AtomicUsize>,
+        Arc<AtomicUsize>,
+        Arc<Version>,
+    ),
     Auth,
 }
 
@@ -183,14 +167,14 @@ fn worker_event_loop(
                     .await;
                 Response::Asset(result, tag)
             }
-            Message::Jar(json, tag) => {
+            Message::Jar(json, total, finished, tag) => {
                 let result = launcher_core
-                    .download_jar(&json, &path.join("versions"))
+                    .download_jar(&json, &path.join("versions"), &total, &finished)
                     .await;
                 Response::Jar(result, tag)
             }
             Message::Auth => {
-                let result = auth_or_refresh(&client, &tx).await;
+                let result = auth_or_refresh(&client, &tx, Path::new("./")).await;
                 Response::Auth(result)
             }
         }
@@ -199,10 +183,15 @@ fn worker_event_loop(
 
 const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
 
-async fn auth_or_refresh(client: &Client, tx: &Sender<EarlyMessage>) -> Result<Account, Error> {
-    let exists = tokio::fs::try_exists("./refresh.txt").await?;
+async fn auth_or_refresh(
+    client: &Client,
+    tx: &Sender<EarlyMessage>,
+    path: &Path,
+) -> Result<Account, Error> {
+    let refresh_file = path.join("refresh.txt");
+    let exists = tokio::fs::try_exists(&refresh_file).await?;
     let auth_res = if exists {
-        let token = tokio::fs::read_to_string("./refresh.txt").await?;
+        let token = tokio::fs::read_to_string(&refresh_file).await?;
         refresh_token_response(client, &token, CLIENT_ID)
             .await?
             .into()
@@ -243,7 +232,7 @@ async fn auth_or_refresh(client: &Client, tx: &Sender<EarlyMessage>) -> Result<A
 
     let profile = minecraft_profile_response(&mc_res.access_token, client).await?;
 
-    tokio::fs::write("./refresh.txt", &auth_res.refresh_token).await?;
+    tokio::fs::write(refresh_file, &auth_res.refresh_token).await?;
 
     use std::time::{Duration, SystemTime};
 
@@ -289,7 +278,11 @@ impl LauncherGui {
 
         LauncherGui {
             rt,
-            data: Default::default(),
+            data: MCData {
+                // Defaults to usize::MAX to show no version is selected
+                selected_version: usize::MAX,
+                ..Default::default()
+            },
             current_error: None,
             rx,
             account: None,
@@ -312,7 +305,7 @@ impl LauncherGui {
                 },
                 Response::Libraries(result, tag) => match result {
                     Ok(path) => {
-                        let versions = &self.data.versions.as_ref().unwrap();
+                        let versions = self.data.versions.as_ref().unwrap();
                         if versions.versions[self.data.selected_version] == tag {
                             self.data.class_path = Some(path);
                         }
@@ -321,7 +314,7 @@ impl LauncherGui {
                 },
                 Response::AssetIndex(idx, tag) => match idx {
                     Ok(json) => {
-                        let versions = &self.data.versions.as_ref().unwrap();
+                        let versions = self.data.versions.as_ref().unwrap();
                         if versions.versions[self.data.selected_version] == tag {
                             let index = Arc::new(json);
 
@@ -339,7 +332,7 @@ impl LauncherGui {
                 },
                 Response::Asset(result, tag) => match result {
                     Ok(()) => {
-                        let versions = &self.data.versions.as_ref().unwrap();
+                        let versions = self.data.versions.as_ref().unwrap();
                         if versions.versions[self.data.selected_version] == tag {
                             self.data.assets = true;
                         }
@@ -348,7 +341,7 @@ impl LauncherGui {
                 },
                 Response::Jar(res, tag) => match res {
                     Ok(jar) => {
-                        let versions = &self.data.versions.as_ref().unwrap();
+                        let versions = self.data.versions.as_ref().unwrap();
                         if versions.versions[self.data.selected_version] == tag {
                             self.data.jar = true;
                             self.data.jar_path = jar;
@@ -378,7 +371,12 @@ impl LauncherGui {
             self.data.finished_libraries.clone(),
             tag.clone(),
         ));
-        self.rt.send_with_message(Message::Jar(json.clone(), tag));
+        self.rt.send_with_message(Message::Jar(
+            json.clone(),
+            self.data.total_jar.clone(),
+            self.data.finished_jar.clone(),
+            tag,
+        ));
     }
 
     fn maybe_launch(&self) -> bool {
@@ -387,7 +385,7 @@ impl LauncherGui {
             &self.data.version_json,
             &self.account,
         ) {
-            if self.data.assets {
+            if self.data.assets && self.data.launching {
                 let dir = Path::new("./");
 
                 launcher_core::launch_game(
@@ -400,7 +398,7 @@ impl LauncherGui {
                     "0",
                     "Synth Launcher",
                     "0.1.0",
-                    class_path,
+                    &format!("{}{}", class_path, &self.data.jar_path),
                 );
                 !self.data.launching
             } else {
@@ -502,9 +500,8 @@ impl eframe::App for LauncherGui {
                                         if !self.data.json_started {
                                             self.data.json_started = true;
 
-                                            self.rt.send_with_message(Message::Version(
-                                                version.clone(),
-                                            ));
+                                            let version = version.clone();
+                                            self.rt.send_with_message(Message::Version(version));
                                         }
                                     };
                                 })
@@ -536,13 +533,43 @@ impl eframe::App for LauncherGui {
 
             if self.data.launching {
                 egui::Window::new("Progress").auto_sized().show(ctx, |ui| {
-                    let total = self.data.total_libraries.load(Ordering::Relaxed);
+                    let maybe_total = self.data.total_libraries.load(Ordering::Relaxed);
                     let finished = self.data.finished_libraries.load(Ordering::Relaxed);
-                    ui.label(format!("Library Progress: {:.2} %", (finished as f64 / total as f64) * 100.0));
 
-                    let total = self.data.total_assets.load(Ordering::Relaxed);
+                    // Ensure we're not dividing by 0
+                    let total = if maybe_total == 0 { 1 } else { maybe_total };
+
+                    ui.label(format!(
+                        "Library Progress: {:.2} %",
+                        (finished as f64 / total as f64) * 100.0
+                    ));
+
+                    let maybe_total = self.data.total_assets.load(Ordering::Relaxed);
                     let finished = self.data.finished_assets.load(Ordering::Relaxed);
-                    ui.label(format!("Asset Progress: {:.2} %", (finished as f64 / total as f64) * 100.0));
+
+                    // Ensure we're not dividing by 0
+                    let total = if maybe_total == 0 { 1 } else { maybe_total };
+                    ui.label(format!(
+                        "Asset Progress: {:.2} %",
+                        (finished as f64 / total as f64) * 100.0
+                    ));
+
+                    if !self.data.jar {
+                        let maybe_total = self.data.total_jar.load(Ordering::Relaxed);
+                        let finished = self.data.finished_jar.load(Ordering::Relaxed);
+
+                        // Ensure we're not dividing by 0
+                        let total = if maybe_total == 0 { 1 } else { maybe_total };
+
+                        ui.label(format!(
+                            "Jar Progress: {:.2} %",
+                            (finished as f64 / total as f64) * 100.0
+                        ));
+                    } else {
+                        ui.label("Jar Progress: 100.00%");
+                    }
+
+                    ctx.request_repaint();
                 });
             }
 

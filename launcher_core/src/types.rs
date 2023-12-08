@@ -137,6 +137,35 @@ pub struct Rule {
     pub os: Option<Os>,
 }
 
+impl Rule {
+    pub fn applies(&self) -> bool {
+        if let Some(os) = &self.os {
+            if os.name == OS {
+                if self.action == Action::Allow {
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else if self.action == Action::Allow {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn native(&self) -> bool {
+        if let Some(os) = &self.os {
+            if os.name == OS && self.action == Action::Allow {
+                return true;
+            }
+        }
+        false
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
@@ -198,6 +227,7 @@ pub struct Object {
 
 pub use legacy::Legacy;
 pub use modern::Modern;
+use crate::OS;
 
 pub mod modern {
     use std::sync::Arc;

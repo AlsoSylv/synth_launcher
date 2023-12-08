@@ -4,8 +4,9 @@ use std::fmt::Display;
 use std::{path::Path, sync::atomic::AtomicUsize};
 
 use crate::account::types::Account;
-use futures::{stream, TryStreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
 use time::format_description::well_known::Rfc2822;
+use tokio::io::AsyncWriteExt;
 
 #[cfg(windows)]
 const OS: &str = "windows";
@@ -74,6 +75,20 @@ impl AsyncLauncher {
         Self { client }
     }
 
+    /// Downloads "version_manifest.json" to the provided directory,
+    /// Returning a copy in memory. This will automatically append
+    /// new entries to the start of the version manifest.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// async fn example() {
+    ///     let client  = reqwest::Client::new();
+    ///     let launcher = launcher_core::AsyncLauncher::new(client);
+    ///
+    ///     let path = std::path::Path::new("./");
+    ///     launcher.get_version_manifest(path).await.unwrap();
+    /// }
     pub async fn get_version_manifest(
         &self,
         directory: &Path,
@@ -88,26 +103,40 @@ impl AsyncLauncher {
             let dt_mod = time::OffsetDateTime::from(metadata.modified()?);
 
             let response = self.client.head(VERSION_MANIFEST_URL).send().await?;
-            let cdn_modified = response.headers()[reqwest::header::LAST_MODIFIED]
-                .to_str()
-                .unwrap();
+            let header_map = response.headers();
+            let cdn_modified = header_map[reqwest::header::LAST_MODIFIED].to_str().unwrap();
             let dt_cdn = time::OffsetDateTime::parse(cdn_modified, &Rfc2822).unwrap();
 
-            if dt_cdn < dt_mod {
-                let buf = tokio::fs::read(file).await?;
-                return Ok(serde_json::from_slice(&buf)?);
-            } // TODO: If this is false, it should append to the exist manifest, not replace it
+            let buf = tokio::fs::read(&file).await?;
+            let mut meta: types::VersionManifest = serde_json::from_slice(&buf)?;
+
+            if dt_cdn > dt_mod {
+                let response = self.client.get(VERSION_MANIFEST_URL).send().await?;
+                let updated: types::VersionManifest = response.json().await?;
+
+                for versions in updated.versions {
+                    if !meta.versions.contains(&versions) {
+                        meta.versions.push(versions);
+                    }
+                }
+
+                let slice = serde_json::to_vec(&meta)?;
+
+                tokio::fs::write(file, &slice).await?;
+            }
+
+            Ok(meta)
+        } else {
+            if !tokio::fs::try_exists(directory).await? {
+                tokio::fs::create_dir_all(directory).await?;
+            }
+
+            let response = self.client.get(VERSION_MANIFEST_URL).send().await?;
+            let bytes = response.bytes().await?;
+
+            tokio::fs::write(file, &bytes).await?;
+            Ok(serde_json::from_slice(&bytes)?)
         }
-
-        if !tokio::fs::try_exists(directory).await? {
-            tokio::fs::create_dir_all(directory).await?;
-        }
-
-        let response = self.client.get(VERSION_MANIFEST_URL).send().await?;
-        let bytes = response.bytes().await?;
-
-        tokio::fs::write(file, &bytes).await?;
-        Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// This expects a path such as `./Versions`
@@ -245,39 +274,26 @@ impl AsyncLauncher {
         total.store(0, std::sync::atomic::Ordering::Relaxed);
 
         stream::iter(libraries.iter().filter_map(|library| {
+            let mut native = library.natives.is_some() || library.extract.is_some();
             let dir = directory.to_str().unwrap();
-            path.reserve(library.name.len() + dir.len() + 2);
-            let mut lib: Option<&types::Library> = None;
             if let Some(rules) = &library.rules {
-                for rule in rules {
-                    if let Some(os) = &rule.os {
-                        if os.name == OS {
-                            if rule.action == types::Action::Allow {
-                                lib = Some(library);
-                            } else {
-                                return None;
-                            }
-                        } else {
-                            continue;
-                        }
-                    } else if rule.action == types::Action::Allow {
-                        lib = Some(library);
-                    } else {
-                        return None;
-                    }
+                let mut rule_iter = rules.iter();
+
+                if !rule_iter.any(|rule| rule.applies()) {
+                    return None;
                 }
-            } else {
-                lib = Some(library);
+
+                native |= rule_iter.all(|rule| rule.native());
             }
 
-            // This guarantees that it is initialized
-            // Because if it's none here then there
-            // Is no library to check to begin with
-            let Some(lib) = lib else {
-                return None;
-            };
+            // Move to after rule validation to reduce
+            path.reserve_exact(library.name.len() + dir.len() + 2);
 
-            let artifact = if let Some(classifier) = &library.downloads.classifiers {
+            let artifact: &types::Artifact;
+
+            if let Some(classifier) = &library.downloads.classifiers {
+                let option: Option<&types::Artifact>;
+
                 #[cfg(target_os = "windows")]
                 let option = if classifier.natives_windows.is_some() {
                     classifier.natives_windows.as_ref()
@@ -290,38 +306,38 @@ impl AsyncLauncher {
                 };
 
                 #[cfg(target_os = "macos")]
-                let option = if classifier.natives_osx.is_some() {
-                    classifier.natives_osx.as_ref()
+                if classifier.natives_osx.is_some() {
+                    option = classifier.natives_osx.as_ref()
                 } else {
-                    classifier.natives_macos.as_ref()
+                    option = classifier.natives_macos.as_ref()
                 };
 
                 #[cfg(target_os = "linux")]
-                let option = if classifier.natives_linux.is_some() {
-                    classifier.natives_linux.as_ref()
+                if classifier.natives_linux.is_some() {
+                    option = classifier.natives_linux.as_ref()
                 } else if cfg!(target_arch = "x86_64") {
-                    classifier.linux_x86_64.as_ref()
+                    option = classifier.linux_x86_64.as_ref()
                 } else {
-                    classifier.natives_linux.as_ref()
+                    option = classifier.natives_linux.as_ref()
                 };
 
                 match option {
-                    Some(art) => (true, art),
+                    Some(art) => artifact = art,
                     None => return None,
                 }
-            } else if let Some(artifact) = &lib.downloads.artifact {
-                (false, artifact)
+            } else if let Some(art) = &library.downloads.artifact {
+                artifact = art;
             } else {
                 unreachable!("Found missing artifact")
             };
 
             #[cfg(not(windows))]
-            path.extend([dir, "/", &artifact.1.path, ":"]);
+            path.extend([dir, "/", &artifact.path, ":"]);
 
             #[cfg(windows)]
             path.extend([dir, "/", &artifact.1.path, ";"]);
 
-            Some(Ok::<_, Error>(artifact))
+            Some(Ok::<_, Error>((native, artifact)))
         }))
         .try_for_each_concurrent(16, |(native, artifact)| {
             total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -375,7 +391,12 @@ impl AsyncLauncher {
         &self,
         version_details: &types::VersionJson,
         directory: &Path,
+        total_bytes: &AtomicUsize,
+        finished_bytes: &AtomicUsize,
     ) -> Result<String, Error> {
+        total_bytes.store(0, std::sync::atomic::Ordering::Relaxed);
+        finished_bytes.fetch_add(0, std::sync::atomic::Ordering::Relaxed);
+
         let id = version_details.id();
         let url = version_details.url();
         let folder = directory.join(id);
@@ -392,9 +413,18 @@ impl AsyncLauncher {
             }
         }
 
+        let mut file = tokio::fs::File::create(file).await?;
+
         let jar = self.client.get(url).send().await?;
-        let buf = jar.bytes().await?;
-        tokio::fs::write(file, buf).await?;
+        let len = jar.content_length().unwrap();
+        total_bytes.store(len as usize, std::sync::atomic::Ordering::Relaxed);
+
+        let mut stream = jar.bytes_stream();
+        while let Some(next) = stream.next().await {
+            let chunk = next?;
+            file.write_all(&chunk).await?;
+            finished_bytes.fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
+        }
 
         Ok(str)
     }
@@ -416,7 +446,8 @@ async fn extract_native(native_dir: &Path, buf: Vec<u8>) -> Result<(), Error> {
         if entry.dir().unwrap() {
             continue;
         } else {
-            let file = entry.filename().as_str().unwrap();
+            let file_path = entry.filename().as_str().unwrap();
+            let file = file_path.split('/').last().unwrap();
 
             #[cfg(windows)]
             let ends_with = ".dll";
@@ -479,11 +510,13 @@ pub fn launch_game(
                     });
                 }
                 types::modern::JvmElement::String(arg) => {
-                    let arg = arg
-                        .replace("${natives_directory}", &natives_dir.to_string_lossy())
-                        .replace("${launcher_name}", launcher_name)
-                        .replace("${launcher_version}", launcher_version)
-                        .replace("${classpath}", class_path);
+                    let arg = apply_jvm_args(
+                        arg,
+                        &natives_dir,
+                        launcher_name,
+                        launcher_version,
+                        class_path,
+                    );
 
                     process.arg(arg);
                 }
@@ -516,15 +549,16 @@ pub fn launch_game(
                 "-Dminecraft.launcher.version=${launcher_version}",
                 "-cp",
                 "${classpath}",
-            ]
-            .map(String::from);
+            ];
 
             for arg in jvm_args {
-                let arg = arg
-                    .replace("${natives_directory}", &natives_dir.to_string_lossy())
-                    .replace("${launcher_name}", launcher_name)
-                    .replace("${launcher_version}", launcher_version)
-                    .replace("${classpath}", class_path);
+                let arg = apply_jvm_args(
+                    arg,
+                    &natives_dir,
+                    launcher_name,
+                    launcher_version,
+                    class_path,
+                );
 
                 process.arg(arg);
             }
@@ -532,7 +566,7 @@ pub fn launch_game(
             process.arg(&legacy.main_class);
 
             let args: Vec<&str> = legacy.minecraft_arguments.split(' ').collect();
-            for arg in &args {
+            for arg in args {
                 let arg = apply_mc_args(
                     arg, json, directory, asset_root, account, client_id, auth_xuid,
                 );
@@ -546,6 +580,20 @@ pub fn launch_game(
         .spawn()
         .unwrap();
     process.spawn().unwrap();
+}
+
+fn apply_jvm_args(
+    string: &str,
+    natives_dir: &Path,
+    launcher_name: &str,
+    launcher_version: &str,
+    class_path: &str,
+) -> String {
+    string
+        .replace("${natives_directory}", &natives_dir.to_string_lossy())
+        .replace("${launcher_name}", launcher_name)
+        .replace("${launcher_version}", launcher_version)
+        .replace("${classpath}", class_path)
 }
 
 fn apply_mc_args(
@@ -580,6 +628,7 @@ mod tests {
     use std::{fs, path::Path, sync::atomic::AtomicUsize};
 
     use reqwest::Client;
+    use tokio::io::AsyncWriteExt;
 
     use crate::{types::VersionJson, AsyncLauncher};
 
@@ -664,6 +713,32 @@ mod tests {
             };
             // println!("{}", path);
         }
-        fs::remove_dir_all("./Libs").unwrap();
+    }
+
+    #[tokio::test]
+    async fn stream_write() {
+        use futures::stream::StreamExt;
+        let client = Client::new();
+
+        let mut file = tokio::fs::File::create("./1.20.3.jar").await.unwrap();
+
+        let jar = client.get("https://piston-data.mojang.com/v1/objects/b178a327a96f2cf1c9f98a45e5588d654a3e4369/client.jar").send().await.unwrap();
+
+        let mut stream = jar.bytes_stream();
+        while let Some(next) = stream.next().await {
+            let chunk = next.unwrap();
+            file.write_all(&chunk).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_write() {
+        let client = Client::new();
+
+        let jar = client.get("https://piston-data.mojang.com/v1/objects/b178a327a96f2cf1c9f98a45e5588d654a3e4369/client.jar").send().await.unwrap();
+
+        let stream = jar.bytes().await.unwrap();
+
+        tokio::fs::write("./1.20.3.jar", &stream).await.unwrap();
     }
 }
