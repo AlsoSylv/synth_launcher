@@ -295,14 +295,14 @@ impl AsyncLauncher {
                 let option: Option<&types::Artifact>;
 
                 #[cfg(target_os = "windows")]
-                let option = if classifier.natives_windows.is_some() {
-                    classifier.natives_windows.as_ref()
+                if classifier.natives_windows.is_some() {
+                    option = classifier.natives_windows.as_ref()
                 } else if cfg!(target_arch = "x86_64") {
-                    classifier.natives_windows_64.as_ref()
+                    option = classifier.natives_windows_64.as_ref()
                 } else if cfg!(target_arch = "x86") {
-                    classifier.natives_windows_32.as_ref()
+                    option = classifier.natives_windows_32.as_ref()
                 } else {
-                    classifier.natives_windows.as_ref()
+                    option = classifier.natives_windows.as_ref()
                 };
 
                 #[cfg(target_os = "macos")]
@@ -335,7 +335,7 @@ impl AsyncLauncher {
             path.extend([dir, "/", &artifact.path, ":"]);
 
             #[cfg(windows)]
-            path.extend([dir, "/", &artifact.1.path, ";"]);
+            path.extend([dir, "/", &artifact.path, ";"]);
 
             Some(Ok::<_, Error>((native, artifact)))
         }))

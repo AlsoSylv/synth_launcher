@@ -9,6 +9,7 @@ edition = "2021"
 lto = true
 
 [dependencies]
+rfd = "0.12"
 eframe.workspace = true
 launcher_core.workspace = true
 async_bridge.workspace = true

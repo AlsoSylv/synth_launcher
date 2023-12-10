@@ -35,6 +35,7 @@ struct LauncherGui {
     url: Option<String>,
     code: Option<String>,
     rx: async_channel::Receiver<EarlyMessage>,
+    java_path: Option<String>,
 }
 
 #[derive(Default)]
@@ -288,6 +289,7 @@ impl LauncherGui {
             account: None,
             code: None,
             url: None,
+            java_path: None
         }
     }
 
@@ -506,6 +508,19 @@ impl eframe::App for LauncherGui {
                                     };
                                 })
                         });
+
+                    let text = if self.java_path.is_some() {
+                        "Java Version Selected!"
+                    } else {
+                        "Select Java Version"
+                    };
+
+                    // Todo: Check Java Version
+                    if ui.button(text).clicked() {
+                        if let Some(path) = rfd::FileDialog::new().pick_file() {
+                            self.java_path = Some(path.display().to_string());
+                        }
+                    }
 
                     let button = Button::new("Play");
 
