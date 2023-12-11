@@ -5,7 +5,6 @@ use std::{path::Path, sync::atomic::AtomicUsize};
 
 use crate::account::types::Account;
 use futures::{stream, StreamExt, TryStreamExt};
-use time::format_description::well_known::Rfc2822;
 use tokio::io::AsyncWriteExt;
 
 #[cfg(windows)]
@@ -99,31 +98,24 @@ impl AsyncLauncher {
         let file = directory.join("version_manifest.json");
 
         if tokio::fs::try_exists(&file).await? {
-            let metadata = tokio::fs::metadata(&file).await?;
-            let dt_mod = time::OffsetDateTime::from(metadata.modified()?);
-
-            let response = self.client.head(VERSION_MANIFEST_URL).send().await?;
-            let header_map = response.headers();
-            let cdn_modified = header_map[reqwest::header::LAST_MODIFIED].to_str().unwrap();
-            let dt_cdn = time::OffsetDateTime::parse(cdn_modified, &Rfc2822).unwrap();
+            let response = self.client.get(VERSION_MANIFEST_URL).send().await?;
 
             let buf = tokio::fs::read(&file).await?;
             let mut meta: types::VersionManifest = serde_json::from_slice(&buf)?;
 
-            if dt_cdn > dt_mod {
-                let response = self.client.get(VERSION_MANIFEST_URL).send().await?;
-                let updated: types::VersionManifest = response.json().await?;
+            let updated: types::VersionManifest = response.json().await?;
 
+            if meta.latest != updated.latest {
                 for versions in updated.versions {
                     if !meta.versions.contains(&versions) {
                         meta.versions.push(versions);
                     }
                 }
-
-                let slice = serde_json::to_vec(&meta)?;
-
-                tokio::fs::write(file, &slice).await?;
             }
+
+            let slice = serde_json::to_vec(&meta)?;
+
+            tokio::fs::write(file, &slice).await?;
 
             Ok(meta)
         } else {

@@ -5,6 +5,7 @@ enum InternalMessage<M, R> {
     Message(M),
     Callback(Pin<Box<dyn std::future::Future<Output = ()> + Send>>),
     CallbackWithResponse(Pin<Box<dyn std::future::Future<Output = R> + Send>>),
+    Future(Pin<Box<dyn std::future::Future<Output = R> + Send>>),
 }
 
 pub struct Runtime<M, R, S>
@@ -25,7 +26,7 @@ where
     R: Send + 'static,
     M: Send + 'static,
 {
-    /// Creates a new Runtime for egui, allowiing you to define how you react to events
+    /// Creates a new Runtime for egui, allowing you to define how you react to events
     /// in the form of returning a struct, which will then get sent back to your egui thread
     pub fn new<F, T>(
         thread_count: usize,
@@ -62,6 +63,10 @@ where
                                 tx.send(fut.await).await.unwrap();
                                 ctx.request_repaint();
                             }
+                            InternalMessage::Future(future) => {
+                                tx.send(future.await).await.unwrap();
+                                ctx.request_repaint();
+                            }
                         }
                     }
                 }
@@ -82,7 +87,7 @@ where
             .expect("There should be no way to close the channel on the other end here")
     }
 
-    pub fn send_with_callback<F, Fut>(&self, callback: F)
+    pub fn callback<F, Fut>(&self, callback: F)
     where
         F: Fn(&S) -> Fut,
         Fut: std::future::Future<Output = ()> + Send + 'static,
@@ -92,7 +97,7 @@ where
             .expect("There should be no way to close the channel on the other end here")
     }
 
-    pub fn send_with_callback_with_response<F, Fut>(&self, callback: F)
+    pub fn callback_response<F, Fut>(&self, callback: F)
     where
         F: Fn(&S) -> Fut,
         Fut: std::future::Future<Output = R> + Send + 'static,
@@ -104,7 +109,16 @@ where
             .expect("There should be no way to close the channel on the other end here")
     }
 
-    pub fn try_recv(&self) -> Result<R, async_channel::TryRecvError> {
+    pub fn future<Fut>(&self, future: Fut)
+    where
+        Fut: std::future::Future<Output = R> + Send + 'static,
+    {
+        self.tx
+            .send_blocking(InternalMessage::Future(Box::pin(future)))
+            .expect("There should be no way to close the channel on the other end here");
+    }
+
+    pub fn try_recv(&self) -> Result<R, TryRecvError> {
         self.rx.try_recv()
     }
 }

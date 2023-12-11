@@ -8,7 +8,7 @@ pub struct VersionManifest {
     pub versions: Vec<Arc<Version>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Latest {
     pub release: String,
     pub snapshot: String,
@@ -225,9 +225,9 @@ pub struct Object {
     pub size: i64,
 }
 
+use crate::OS;
 pub use legacy::Legacy;
 pub use modern::Modern;
-use crate::OS;
 
 pub mod modern {
     use std::sync::Arc;

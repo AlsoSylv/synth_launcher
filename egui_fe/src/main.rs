@@ -1,4 +1,9 @@
-use async_channel::Sender;
+mod worker_logic;
+mod wrappers;
+
+use worker_logic::*;
+use wrappers::*;
+
 use std::{
     path::Path,
     sync::{
@@ -8,34 +13,40 @@ use std::{
 };
 
 use eframe::egui::{self, Button, Label, Sense, Style};
-use launcher_core::account::auth::{
-    authorization_token_response, minecraft_ownership_response, minecraft_profile_response,
-    minecraft_response, refresh_token_response, xbox_response, xbox_security_token_response,
-};
 use launcher_core::account::types::Account;
 use launcher_core::{
-    account::auth::device_response,
-    types::{AssetIndex, AssetIndexJson, Library, Version, VersionJson, VersionManifest},
-    Error,
+    types::{AssetIndexJson, VersionJson, VersionManifest},
+    AsyncLauncher, Error,
 };
 use reqwest::Client;
 
-// TODO: Move player data into a separate struct
-// TODO: Store encrypted auth token for reuse
-// TODO: Document existing UI functionality
+// TODO: Store encrypted auth token for reuse: Use Keyring crate
+// TODO: Document existing UI functionality: In-Progress
 // TODO: Make vector of accounts, allow account selection
-// TODO: Make instances, must be savable to disk, maybe using RON?
+// TODO: Make instances, must be savable to disk, maybe using RON?: Json Format
 // TODO: Redo error handling, fields that can error should hold Result<T, E>
-// TODO: Config file/Config tx/rx setup
+// UPDATE: We could also add a tag to the error? Not sure. Constant Error checking would suck.
+// TODO: Config file/Config tx/rx setup: TOML
 struct LauncherGui {
     rt: async_bridge::Runtime<Message, Response, State>,
-    data: MCData,
-    current_error: Option<Error>,
-    account: Option<Account>,
-    url: Option<String>,
-    code: Option<String>,
     rx: async_channel::Receiver<EarlyMessage>,
-    java_path: Option<String>,
+    launcher: Arc<AsyncLauncher>,
+    data: MCData,
+    player: PlayerData,
+    java_version: u32,
+    current_error: Option<Error>,
+    java_path: Option<Arc<str>>,
+    started: bool,
+}
+
+#[derive(Default)]
+struct PlayerData {
+    // Player account, if it exists
+    account: Option<Account>,
+    // URL for auth, if it exists
+    url: Option<String>,
+    // Code will always exist if URL does
+    code: Option<String>,
 }
 
 #[derive(Default)]
@@ -64,193 +75,12 @@ struct MCData {
     class_path: Option<String>,
     // The jar path, stored separate because futures are not ordered
     jar_path: String,
-    // Whether the manifest json future is running, only flipped once
-    // But needs to be flipped again if connection fails
-    manifest_started: bool,
-    json_started: bool,
     // Whether or not all assets are loaded
     assets: bool,
     // Whether or not the current MC jar is ready
     jar: bool,
     // If the launcher is attempting to launch
     launching: bool,
-}
-
-enum Message {
-    Versions,
-    Version(Arc<Version>),
-    AssetIndex(Arc<AssetIndex>, Arc<Version>),
-    Libraries(
-        Arc<[Library]>,
-        Arc<AtomicUsize>,
-        Arc<AtomicUsize>,
-        Arc<Version>,
-    ),
-    Assets(
-        Arc<AssetIndexJson>,
-        Arc<AtomicUsize>,
-        Arc<AtomicUsize>,
-        Arc<Version>,
-    ),
-    Jar(
-        Arc<VersionJson>,
-        Arc<AtomicUsize>,
-        Arc<AtomicUsize>,
-        Arc<Version>,
-    ),
-    Auth,
-}
-
-enum Response {
-    Versions(Result<VersionManifest, Error>),
-    Version(Result<Box<VersionJson>, Error>),
-    Libraries(Result<String, Error>, Arc<Version>),
-    AssetIndex(Result<AssetIndexJson, Error>, Arc<Version>),
-    Asset(Result<(), Error>, Arc<Version>),
-    Jar(Result<String, Error>, Arc<Version>),
-    Auth(Result<Account, Error>),
-}
-
-#[derive(Clone)]
-struct State {
-    client: Client,
-    launcher_core: launcher_core::AsyncLauncher,
-    tx: Sender<EarlyMessage>,
-}
-
-enum EarlyMessage {
-    LinkCode((String, String)),
-}
-
-fn worker_event_loop(
-    message: Message,
-    state: &State,
-) -> impl std::future::Future<Output = Response> {
-    let client = state.client.clone();
-    let launcher_core = state.launcher_core.clone();
-    let tx = state.tx.clone();
-    let path = Path::new("./");
-    async move {
-        match message {
-            Message::Versions => {
-                let versions = launcher_core
-                    .get_version_manifest(&path.join("versions"))
-                    .await;
-                Response::Versions(versions)
-            }
-            Message::Version(version) => {
-                let json = launcher_core
-                    .get_version_json(&version, &path.join("versions"))
-                    .await;
-                Response::Version(json.map(Box::new))
-            }
-            Message::Libraries(libs, total, finished, tag) => {
-                let path = launcher_core
-                    .download_libraries_and_get_path(
-                        &libs,
-                        &path.join("libraries"),
-                        &path.join("natives"),
-                        &total,
-                        &finished,
-                    )
-                    .await;
-                Response::Libraries(path, tag)
-            }
-            Message::AssetIndex(asset_index, tag) => {
-                let index = launcher_core
-                    .get_asset_index_json(&asset_index, &path.join("assets"))
-                    .await;
-                Response::AssetIndex(index, tag)
-            }
-            Message::Assets(index, total, finished, tag) => {
-                let result = launcher_core
-                    .download_and_store_asset_index(&index, &path.join("assets"), &total, &finished)
-                    .await;
-                Response::Asset(result, tag)
-            }
-            Message::Jar(json, total, finished, tag) => {
-                let result = launcher_core
-                    .download_jar(&json, &path.join("versions"), &total, &finished)
-                    .await;
-                Response::Jar(result, tag)
-            }
-            Message::Auth => {
-                let result = auth_or_refresh(&client, &tx, Path::new("./")).await;
-                Response::Auth(result)
-            }
-        }
-    }
-}
-
-const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
-
-async fn auth_or_refresh(
-    client: &Client,
-    tx: &Sender<EarlyMessage>,
-    path: &Path,
-) -> Result<Account, Error> {
-    let refresh_file = path.join("refresh.txt");
-    let exists = tokio::fs::try_exists(&refresh_file).await?;
-    let auth_res = if exists {
-        let token = tokio::fs::read_to_string(&refresh_file).await?;
-        refresh_token_response(client, &token, CLIENT_ID)
-            .await?
-            .into()
-    } else {
-        // https://wiki.vg/Microsoft_Authentication_Scheme
-
-        let device_response = device_response(client, CLIENT_ID).await?;
-
-        let code = device_response.user_code;
-        let ms_url = device_response.verification_uri;
-
-        tx.send(EarlyMessage::LinkCode((ms_url, code)))
-            .await
-            .unwrap();
-
-        loop {
-            let device_code = &device_response.device_code;
-            let auth_hook = authorization_token_response(client, device_code, CLIENT_ID).await;
-            if let Ok(t) = auth_hook {
-                break t;
-            }
-        }
-    };
-
-    let xbox_response = xbox_response(client, &auth_res.access_token).await?;
-
-    let xbox_secure_token_res = xbox_security_token_response(client, &xbox_response.token).await?;
-
-    let claims = &xbox_secure_token_res.display_claims;
-    let token = &xbox_secure_token_res.token;
-    let mc_res = minecraft_response(claims, token, client).await?;
-
-    let ownership_check = minecraft_ownership_response(&mc_res.access_token, client).await?;
-
-    if ownership_check.items.is_empty() {
-        todo!("Is this worth checking?")
-    }
-
-    let profile = minecraft_profile_response(&mc_res.access_token, client).await?;
-
-    tokio::fs::write(refresh_file, &auth_res.refresh_token).await?;
-
-    use std::time::{Duration, SystemTime};
-
-    let expires_in = Duration::from_secs(auth_res.expires_in);
-    let system_time = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap();
-    let combined_duration = system_time + expires_in;
-
-    let account = Account {
-        active: true,
-        expiry: combined_duration.as_secs(),
-        access_token: mc_res.access_token,
-        profile,
-    };
-
-    Ok(account)
 }
 
 impl LauncherGui {
@@ -262,14 +92,14 @@ impl LauncherGui {
             .expect("Runtime Failed to Build");
 
         let client = Client::new();
-        let launcher_core = launcher_core::AsyncLauncher::new(client.clone());
+        let launcher_core = Arc::new(AsyncLauncher::new(client.clone()));
         let (tx, rx) = async_channel::unbounded();
 
         let rt = async_bridge::Runtime::new(
             4,
             State {
                 client,
-                launcher_core,
+                launcher_core: launcher_core.clone(),
                 tx,
             },
             cc.egui_ctx.clone(),
@@ -279,17 +109,18 @@ impl LauncherGui {
 
         LauncherGui {
             rt,
+            rx,
+            launcher: launcher_core.clone(),
+            player: Default::default(),
             data: MCData {
                 // Defaults to usize::MAX to show no version is selected
                 selected_version: usize::MAX,
                 ..Default::default()
             },
+            java_version: u32::MAX,
             current_error: None,
-            rx,
-            account: None,
-            code: None,
-            url: None,
-            java_path: None
+            java_path: None,
+            started: false,
         }
     }
 
@@ -320,12 +151,16 @@ impl LauncherGui {
                         if versions.versions[self.data.selected_version] == tag {
                             let index = Arc::new(json);
 
-                            self.rt.send_with_message(Message::Assets(
+                            let future = get_assets(
+                                self.launcher.clone(),
                                 index.clone(),
-                                self.data.total_assets.clone(),
+                                Path::new("./assets"),
                                 self.data.finished_assets.clone(),
+                                self.data.total_assets.clone(),
                                 tag.clone(),
-                            ));
+                            );
+
+                            self.rt.future(future);
 
                             self.data.asset_index = Some(index)
                         }
@@ -352,9 +187,21 @@ impl LauncherGui {
                     Err(err) => self.current_error = Some(err),
                 },
                 Response::Auth(res) => match res {
-                    Ok(acc) => self.account = Some(acc),
+                    Ok(acc) => self.player.account = Some(acc),
                     Err(err) => self.current_error = Some(err),
                 },
+                Response::JavaMajorVersion(version) | Response::DefaultJavaVersion(version) => {
+                    self.java_version = version.unwrap();
+                }
+            }
+        }
+
+        if let Ok(val) = self.rx.try_recv() {
+            match val {
+                EarlyMessage::LinkCode((url, code)) => {
+                    self.player.code = Some(code);
+                    self.player.url = Some(url);
+                }
             }
         }
     }
@@ -365,33 +212,50 @@ impl LauncherGui {
         let current = self.data.selected_version;
         let tag = manifest.versions[current].clone();
 
-        self.rt
-            .send_with_message(Message::AssetIndex(index, tag.clone()));
-        self.rt.send_with_message(Message::Libraries(
+        let future = get_asset_index(
+            self.launcher.clone(),
+            index.clone(),
+            tag.clone(),
+            Path::new("./assets"),
+        );
+        self.rt.future(future);
+        let future = get_libraries(
+            self.launcher.clone(),
             libraries,
+            Path::new("./"),
             self.data.total_libraries.clone(),
             self.data.finished_libraries.clone(),
             tag.clone(),
-        ));
-        self.rt.send_with_message(Message::Jar(
+        );
+        self.rt.future(future);
+        let future = get_jar(
+            self.launcher.clone(),
             json.clone(),
-            self.data.total_jar.clone(),
-            self.data.finished_jar.clone(),
-            tag,
-        ));
+            Path::new("./versions"),
+            self.data.total_libraries.clone(),
+            self.data.finished_libraries.clone(),
+            tag.clone(),
+        );
+        self.rt.future(future);
     }
 
     fn maybe_launch(&self) -> bool {
         if let (Some(class_path), Some(json), Some(acc)) = (
             &self.data.class_path,
             &self.data.version_json,
-            &self.account,
+            &self.player.account,
         ) {
             if self.data.assets && self.data.launching {
                 let dir = Path::new("./");
 
+                let jvm = if let Some(jvm) = &self.java_path {
+                    jvm
+                } else {
+                    "java"
+                };
+
                 launcher_core::launch_game(
-                    "java",
+                    jvm,
                     json,
                     dir,
                     &dir.join("assets"),
@@ -410,16 +274,60 @@ impl LauncherGui {
             self.data.launching
         }
     }
+
+    fn progress_window(&self, ctx: &egui::Context) {
+        egui::Window::new("Progress").auto_sized().show(ctx, |ui| {
+            let percentage =
+                |finished: usize, total: usize| -> f64 { (finished as f64 / total as f64) * 100.0 };
+
+            let maybe_total = self.data.total_libraries.load(Ordering::Relaxed);
+            let finished = self.data.finished_libraries.load(Ordering::Relaxed);
+
+            // Ensure we're not dividing by 0
+            let total = if maybe_total == 0 { 1 } else { maybe_total };
+            let string = format!("Library Progress: {:.2} %", percentage(finished, total));
+            ui.label(string);
+
+            let maybe_total = self.data.total_assets.load(Ordering::Relaxed);
+            let finished = self.data.finished_assets.load(Ordering::Relaxed);
+
+            // Ensure we're not dividing by 0
+            let total = if maybe_total == 0 { 1 } else { maybe_total };
+            let string = format!("Asset Progress: {:.2} %", percentage(finished, total));
+            ui.label(string);
+
+            if !self.data.jar {
+                let maybe_total = self.data.total_jar.load(Ordering::Relaxed);
+                let finished = self.data.finished_jar.load(Ordering::Relaxed);
+
+                // Ensure we're not dividing by 0
+                let total = if maybe_total == 0 { 1 } else { maybe_total };
+                let string = format!("Jar Progress: {:.2} %", percentage(finished, total));
+                ui.label(string);
+            } else {
+                ui.label("Jar Progress: 100.00%");
+            }
+
+            ctx.request_repaint();
+        });
+    }
+
+    fn on_start(&self) {
+        if !self.started {
+            self.rt.future(get_default_version_response());
+            self.rt.send_with_message(Message::Auth);
+            self.rt.send_with_message(Message::Versions);
+        }
+    }
 }
 
 impl eframe::App for LauncherGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // For events that only happen on start
+        self.on_start();
+        self.started = true;
+
         self.update_state(ctx);
-        if !self.data.manifest_started {
-            self.rt.send_with_message(Message::Auth);
-            self.rt.send_with_message(Message::Versions);
-            self.data.manifest_started = true;
-        }
 
         if let Some(error) = &self.current_error {
             egui::Window::new("Help").auto_sized().show(ctx, |ui| {
@@ -427,14 +335,12 @@ impl eframe::App for LauncherGui {
             });
         }
 
-        if self.account.is_none() {
+        if self.player.account.is_none() {
             egui::Window::new("Login").auto_sized().show(ctx, |ui| {
-                if let (Some(url), Some(code)) = (&self.url, &self.code) {
+                if let (Some(url), Some(code)) = (&self.player.url, &self.player.code) {
                     let hyper = egui::Hyperlink::from_label_and_url("Click here to login", url);
                     let label = Label::new(code).sense(Sense::click());
-                    let label = ui.add(label);
-
-                    let label = label.on_hover_ui(|ui| {
+                    let label = ui.add(label).on_hover_ui(|ui| {
                         ui.label("Copy this token into the site below!");
                     });
 
@@ -444,14 +350,6 @@ impl eframe::App for LauncherGui {
                     ui.add(hyper);
                 } else {
                     ui.label("Loading code and url, please wait...");
-                    if let Ok(val) = self.rx.try_recv() {
-                        match val {
-                            EarlyMessage::LinkCode((url, code)) => {
-                                self.code = Some(code);
-                                self.url = Some(url);
-                            }
-                        }
-                    }
                 }
             });
         }
@@ -477,56 +375,54 @@ impl eframe::App for LauncherGui {
                     egui::ComboBox::from_id_source("VersionSelect")
                         .selected_text(text)
                         .show_ui(ui, |ui| {
-                            versions
-                                .versions
-                                .iter()
-                                .enumerate()
-                                .for_each(|(index, version)| {
-                                    let button = ui.selectable_value(
-                                        &mut self.data.selected_version,
-                                        index,
-                                        &version.id,
-                                    );
+                            let iter = versions.versions.iter().enumerate();
+                            iter.for_each(|(index, version)| {
+                                let selected = &mut self.data.selected_version;
 
-                                    if button.clicked() {
-                                        if let Some(json) = &self.data.version_json {
-                                            if version.id != json.id() {
-                                                self.data.json_started = false;
-                                            }
+                                if ui.selectable_value(selected, index, &version.id).clicked() {
+                                    let launcher = self.launcher.clone();
+                                    let version = version.clone();
+                                    let path = Path::new("./versions");
+
+                                    if let Some(json) = &self.data.version_json {
+                                        if version.id != json.id() {
+                                            self.data.version_json = None;
+                                            self.data.class_path = None;
+                                            self.data.assets = false;
+                                            self.rt.future(get_version(launcher, version, path));
                                         }
-
-                                        self.data.version_json = None;
-                                        self.data.class_path = None;
-                                        self.data.assets = false;
-
-                                        if !self.data.json_started {
-                                            self.data.json_started = true;
-
-                                            let version = version.clone();
-                                            self.rt.send_with_message(Message::Version(version));
-                                        }
-                                    };
-                                })
+                                    } else {
+                                        self.rt.future(get_version(launcher, version, path));
+                                    }
+                                };
+                            })
                         });
 
-                    let text = if self.java_path.is_some() {
-                        "Java Version Selected!"
+                    egui::ComboBox::from_id_source("Java Selector").show_ui(ui, |ui| {
+                        // TODO: Config Needed
+                    });
+
+                    let text = if self.java_version != u32::MAX {
+                        self.java_version.to_string()
                     } else {
-                        "Select Java Version"
+                        String::from("Select Java Version")
                     };
 
-                    // Todo: Check Java Version
-                    if ui.button(text).clicked() {
+                    ui.label(format!("Java Version: {text}"));
+
+                    if ui.button("Select Java Version").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_file() {
-                            self.java_path = Some(path.display().to_string());
+                            let path: Arc<str> = path.display().to_string().into();
+                            self.rt.future(get_major_version_response(path.clone()));
+                            self.java_path = Some(path);
                         }
                     }
 
                     let button = Button::new("Play");
 
                     if let Some(version_json) = &self.data.version_json {
-                        let enabled =
-                            ui.add_enabled(!self.data.launching && self.account.is_some(), button);
+                        let enabled = !self.data.launching && self.player.account.is_some();
+                        let enabled = ui.add_enabled(enabled, button);
 
                         if enabled.clicked() {
                             self.prepare_launch(version_json, versions);
@@ -547,45 +443,7 @@ impl eframe::App for LauncherGui {
             ui.set_style(style);
 
             if self.data.launching {
-                egui::Window::new("Progress").auto_sized().show(ctx, |ui| {
-                    let maybe_total = self.data.total_libraries.load(Ordering::Relaxed);
-                    let finished = self.data.finished_libraries.load(Ordering::Relaxed);
-
-                    // Ensure we're not dividing by 0
-                    let total = if maybe_total == 0 { 1 } else { maybe_total };
-
-                    ui.label(format!(
-                        "Library Progress: {:.2} %",
-                        (finished as f64 / total as f64) * 100.0
-                    ));
-
-                    let maybe_total = self.data.total_assets.load(Ordering::Relaxed);
-                    let finished = self.data.finished_assets.load(Ordering::Relaxed);
-
-                    // Ensure we're not dividing by 0
-                    let total = if maybe_total == 0 { 1 } else { maybe_total };
-                    ui.label(format!(
-                        "Asset Progress: {:.2} %",
-                        (finished as f64 / total as f64) * 100.0
-                    ));
-
-                    if !self.data.jar {
-                        let maybe_total = self.data.total_jar.load(Ordering::Relaxed);
-                        let finished = self.data.finished_jar.load(Ordering::Relaxed);
-
-                        // Ensure we're not dividing by 0
-                        let total = if maybe_total == 0 { 1 } else { maybe_total };
-
-                        ui.label(format!(
-                            "Jar Progress: {:.2} %",
-                            (finished as f64 / total as f64) * 100.0
-                        ));
-                    } else {
-                        ui.label("Jar Progress: 100.00%");
-                    }
-
-                    ctx.request_repaint();
-                });
+                self.progress_window(ctx);
             }
 
             self.data.launching = self.maybe_launch();
