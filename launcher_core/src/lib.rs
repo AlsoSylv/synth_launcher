@@ -338,7 +338,6 @@ impl AsyncLauncher {
             let mut sha1 = sha1_smol::Sha1::new();
             let path = directory.join(Path::new(&artifact.path));
             let url = &artifact.url;
-            let finished = &finished;
 
             async move {
                 let parent = path.parent().unwrap();
@@ -347,11 +346,11 @@ impl AsyncLauncher {
                     let buf = tokio::fs::read(&path).await?;
                     sha1.update(&buf);
                     if sha1.digest().to_string() == artifact.sha1 {
-                        finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
                         if native {
                             extract_native(native_dir, buf).await?;
                         }
+
+                        finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                         return Ok(());
                     } else {

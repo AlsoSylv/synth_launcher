@@ -1,34 +1,38 @@
-use crate::worker_logic::Response;
+use crate::worker_logic::{Response, TaggedResponse};
 use launcher_core::types::{AssetIndex, AssetIndexJson, Library, Version, VersionJson};
 use launcher_core::{AsyncLauncher, Error};
 use std::io::Read;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 pub async fn get_asset_index(
     launcher_core: Arc<AsyncLauncher>,
     asset_index: Arc<AssetIndex>,
     tag: Arc<Version>,
-    path: &Path,
+    path: Arc<PathBuf>,
 ) -> Response {
-    let index = launcher_core.get_asset_index_json(&asset_index, path).await;
-    Response::AssetIndex(index, tag)
+    let index = launcher_core
+        .get_asset_index_json(&asset_index, &path.join("assets"))
+        .await;
+    Response::Tagged(TaggedResponse::AssetIndex(index), tag)
 }
 
 pub async fn get_version(
     launcher_core: Arc<AsyncLauncher>,
     version: Arc<Version>,
-    path: &Path,
+    path: Arc<PathBuf>,
 ) -> Response {
-    let json = launcher_core.get_version_json(&version, path).await;
+    let json = launcher_core
+        .get_version_json(&version, &path.join("versions"))
+        .await;
     Response::Version(json.map(Box::new))
 }
 
 pub async fn get_libraries(
     launcher_core: Arc<AsyncLauncher>,
     libs: Arc<[Library]>,
-    path: &Path,
+    path: Arc<PathBuf>,
     total: Arc<AtomicUsize>,
     finished: Arc<AtomicUsize>,
     tag: Arc<Version>,
@@ -42,27 +46,27 @@ pub async fn get_libraries(
             &finished,
         )
         .await;
-    Response::Libraries(path, tag)
+    Response::Tagged(TaggedResponse::Libraries(path), tag)
 }
 
 pub async fn get_jar(
     launcher_core: Arc<AsyncLauncher>,
     json: Arc<VersionJson>,
-    path: &Path,
+    path: Arc<PathBuf>,
     total: Arc<AtomicUsize>,
     finished: Arc<AtomicUsize>,
     tag: Arc<Version>,
 ) -> Response {
     let result = launcher_core
-        .download_jar(&json, path, &total, &finished)
+        .download_jar(&json, &path.join("versions"), &total, &finished)
         .await;
-    Response::Jar(result, tag)
+    Response::Tagged(TaggedResponse::Jar(result), tag)
 }
 
 pub async fn get_assets(
     launcher_core: Arc<AsyncLauncher>,
     index: Arc<AssetIndexJson>,
-    path: &Path,
+    path: Arc<PathBuf>,
     total: Arc<AtomicUsize>,
     finished: Arc<AtomicUsize>,
     tag: Arc<Version>,
@@ -70,14 +74,15 @@ pub async fn get_assets(
     let result = launcher_core
         .download_and_store_asset_index(&index, &path.join("assets"), &total, &finished)
         .await;
-    Response::Asset(result, tag)
+    Response::Tagged(TaggedResponse::Asset(result), tag)
 }
 
-pub async fn get_major_version_response(jvm: Arc<str>) -> Response {
+pub async fn get_major_version_response(jvm: Arc<String>) -> Response {
     Response::JavaMajorVersion(get_major_version(&jvm).await)
 }
 
 pub async fn get_default_version_response() -> Response {
+    println!("H");
     Response::DefaultJavaVersion(get_major_version("java").await)
 }
 
@@ -107,4 +112,33 @@ async fn get_major_version(jvm: &str) -> Result<u32, Error> {
     };
 
     Ok(version.parse().unwrap())
+}
+
+pub fn get_vendor_major_version(jvm: &str) -> (String, u32) {
+    let tmp = std::env::temp_dir();
+    let checker_class_file = tmp.join("VersionPrinter.class");
+    std::fs::write(&checker_class_file, CHECKER_CLASS).unwrap();
+    let io = std::process::Command::new(jvm)
+        .env_clear()
+        .current_dir(tmp)
+        .args(["-DFile.Encoding=UTF-8", "VersionPrinter"])
+        .output()
+        .unwrap();
+
+    let string = String::from_utf8_lossy(&io.stdout);
+
+    let (version, name) = unsafe { string.split_once('\n').unwrap_unchecked() };
+
+    let mut split = version.split('.');
+    let next = split.next().unwrap();
+    let version = if next == "1" {
+        split.next().unwrap()
+    } else {
+        next
+    };
+
+    let name = name.to_string();
+    let version = version.parse().unwrap_or_else(|_| 0);
+
+    (name, version)
 }

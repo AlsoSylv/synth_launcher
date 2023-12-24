@@ -8,12 +8,17 @@ use launcher_core::account::types::Account;
 use launcher_core::types::{AssetIndexJson, Version, VersionJson, VersionManifest};
 use launcher_core::Error;
 use reqwest::Client;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
 
-pub enum Message {
+
+pub struct Message {
+    pub path: Arc<PathBuf>,
+    pub contents: Contents,
+}
+pub enum Contents {
     Versions,
     Auth,
 }
@@ -21,13 +26,17 @@ pub enum Message {
 pub enum Response {
     Versions(Result<VersionManifest, Error>),
     Version(Result<Box<VersionJson>, Error>),
-    Libraries(Result<String, Error>, Arc<Version>),
-    AssetIndex(Result<AssetIndexJson, Error>, Arc<Version>),
-    Asset(Result<(), Error>, Arc<Version>),
-    Jar(Result<String, Error>, Arc<Version>),
+    Tagged(TaggedResponse, Arc<Version>),
     Auth(Result<Account, Error>),
     JavaMajorVersion(Result<u32, Error>),
     DefaultJavaVersion(Result<u32, Error>),
+}
+
+pub enum TaggedResponse {
+    Libraries(Result<String, Error>),
+    AssetIndex(Result<AssetIndexJson, Error>),
+    Asset(Result<(), Error>),
+    Jar(Result<String, Error>),
 }
 
 #[derive(Clone)]
@@ -48,18 +57,17 @@ pub fn worker_event_loop(
     let client = state.client.clone();
     let launcher_core = state.launcher_core.clone();
     let tx = state.tx.clone();
-    let path = Path::new("./");
     async move {
-        match message {
-            Message::Versions => {
+        match message.contents {
+            Contents::Versions => {
                 let versions = launcher_core
-                    .get_version_manifest(&path.join("versions"))
+                    .get_version_manifest(&message.path.join("versions"))
                     .await;
                 Response::Versions(versions)
             }
-            Message::Auth => {
+            Contents::Auth => {
                 let result =
-                    auth_or_refresh(&client, &tx, Path::new("./refresh.txt"), CLIENT_ID).await;
+                    auth_or_refresh(&client, &tx, &message.path.join("refresh.txt"), CLIENT_ID).await;
                 Response::Auth(result)
             }
         }

@@ -1,24 +1,26 @@
 mod worker_logic;
 mod wrappers;
 
+use std::fs::File;
+use std::io::{Read, Write};
 use worker_logic::*;
 use wrappers::*;
 
-use std::{
-    path::Path,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
 };
 
 use eframe::egui::{self, Button, Label, Sense, Style};
 use launcher_core::account::types::Account;
 use launcher_core::{
     types::{AssetIndexJson, VersionJson, VersionManifest},
-    AsyncLauncher, Error,
+    AsyncLauncher,
 };
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 
 // TODO: Store encrypted auth token for reuse: Use Keyring crate
 // TODO: Document existing UI functionality: In-Progress
@@ -28,15 +30,27 @@ use reqwest::Client;
 // UPDATE: We could also add a tag to the error? Not sure. Constant Error checking would suck.
 // TODO: Config file/Config tx/rx setup: TOML
 struct LauncherGui {
+    // Async thread pool to handle futures
     rt: async_bridge::Runtime<Message, Response, State>,
+    // receiver for messages sent before the event is finished
     rx: async_channel::Receiver<EarlyMessage>,
+    // Reference to the async launcher
     launcher: Arc<AsyncLauncher>,
+    // Minecraft Data
     data: MCData,
+    // Data related to the player
     player: PlayerData,
+    launcher_path: Arc<PathBuf>,
+    // Current major java version
     java_version: u32,
+    java_path: Option<Rc<String>>,
+    jvm_name: Rc<String>,
     current_error: Option<Error>,
-    java_path: Option<Arc<str>>,
+    // Path to JVM, if changed
+    // Flipped once for startup tasks
     started: bool,
+    config_file: File,
+    config: Config,
 }
 
 #[derive(Default)]
@@ -59,6 +73,12 @@ struct MCData {
     version_json: Option<Arc<VersionJson>>,
     // Asset Index, read only
     asset_index: Option<Arc<AssetIndexJson>>,
+    // Classpath for the MC jar, also doubles as verifying
+    // That libraries are completely loaded before launch
+    class_path: Option<String>,
+    // The jar path, stored separate because futures are not ordered
+    // This is None if the version has changed
+    jar_path: Option<String>,
     // Total and finished libraries, divide as floats
     // and multiply by 100 to get progress as percentage
     total_libraries: Arc<AtomicUsize>,
@@ -70,21 +90,14 @@ struct MCData {
     // Total progress downloading the MC jar
     total_jar: Arc<AtomicUsize>,
     finished_jar: Arc<AtomicUsize>,
-    // Classpath for the MC jar, also doubles as verifying
-    // That libraries are completely loaded before launch
-    class_path: Option<String>,
-    // The jar path, stored separate because futures are not ordered
-    jar_path: String,
     // Whether or not all assets are loaded
     assets: bool,
-    // Whether or not the current MC jar is ready
-    jar: bool,
     // If the launcher is attempting to launch
     launching: bool,
 }
 
 impl LauncherGui {
-    fn new(cc: &eframe::CreationContext) -> Self {
+    fn new(cc: &eframe::CreationContext, home_dir: PathBuf, config_file: File, config: Config) -> Box<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .worker_threads(4)
@@ -117,11 +130,15 @@ impl LauncherGui {
                 selected_version: usize::MAX,
                 ..Default::default()
             },
+            launcher_path: Arc::new(home_dir),
             java_version: u32::MAX,
             current_error: None,
             java_path: None,
+            jvm_name: Rc::new("Default".into()),
             started: false,
-        }
+            config_file,
+            config
+        }.into()
     }
 
     fn update_state(&mut self, _: &egui::Context) {
@@ -130,68 +147,71 @@ impl LauncherGui {
             match message {
                 Response::Versions(version) => match version {
                     Ok(versions) => self.data.versions = Some(versions),
-                    Err(err) => self.current_error = Some(err),
+                    Err(err) => self.current_error = Some(err.into()),
                 },
                 Response::Version(version) => match version {
                     Ok(json) => self.data.version_json = Some(json.into()),
-                    Err(err) => self.current_error = Some(err),
-                },
-                Response::Libraries(result, tag) => match result {
-                    Ok(path) => {
-                        let versions = self.data.versions.as_ref().unwrap();
-                        if versions.versions[self.data.selected_version] == tag {
-                            self.data.class_path = Some(path);
-                        }
-                    }
-                    Err(err) => self.current_error = Some(err),
-                },
-                Response::AssetIndex(idx, tag) => match idx {
-                    Ok(json) => {
-                        let versions = self.data.versions.as_ref().unwrap();
-                        if versions.versions[self.data.selected_version] == tag {
-                            let index = Arc::new(json);
-
-                            let future = get_assets(
-                                self.launcher.clone(),
-                                index.clone(),
-                                Path::new("./assets"),
-                                self.data.finished_assets.clone(),
-                                self.data.total_assets.clone(),
-                                tag.clone(),
-                            );
-
-                            self.rt.future(future);
-
-                            self.data.asset_index = Some(index)
-                        }
-                    }
-                    Err(err) => self.current_error = Some(err),
-                },
-                Response::Asset(result, tag) => match result {
-                    Ok(()) => {
-                        let versions = self.data.versions.as_ref().unwrap();
-                        if versions.versions[self.data.selected_version] == tag {
-                            self.data.assets = true;
-                        }
-                    }
-                    Err(err) => self.current_error = Some(err),
-                },
-                Response::Jar(res, tag) => match res {
-                    Ok(jar) => {
-                        let versions = self.data.versions.as_ref().unwrap();
-                        if versions.versions[self.data.selected_version] == tag {
-                            self.data.jar = true;
-                            self.data.jar_path = jar;
-                        }
-                    }
-                    Err(err) => self.current_error = Some(err),
+                    Err(err) => self.current_error = Some(err.into()),
                 },
                 Response::Auth(res) => match res {
                     Ok(acc) => self.player.account = Some(acc),
-                    Err(err) => self.current_error = Some(err),
+                    Err(err) => self.current_error = Some(err.into()),
                 },
                 Response::JavaMajorVersion(version) | Response::DefaultJavaVersion(version) => {
+                    println!("H");
                     self.java_version = version.unwrap();
+                    println!("{}", self.java_version);
+                }
+                Response::Tagged(response, tag) => {
+                    if let Some(versions) = &self.data.versions {
+                        match response {
+                            TaggedResponse::Libraries(result) => match result {
+                                Ok(path) => {
+                                    if versions.versions[self.data.selected_version] == tag {
+                                        self.data.class_path = Some(path);
+                                    }
+                                }
+                                Err(err) => self.current_error = Some(err.into()),
+                            },
+                            TaggedResponse::AssetIndex(idx) => match idx {
+                                Ok(json) => {
+                                    if versions.versions[self.data.selected_version] == tag {
+                                        let index = Arc::new(json);
+
+                                        let future = get_assets(
+                                            self.launcher.clone(),
+                                            index.clone(),
+                                            self.launcher_path.clone(),
+                                            self.data.total_assets.clone(),
+                                            self.data.finished_assets.clone(),
+                                            tag.clone(),
+                                        );
+
+                                        self.rt.future(future);
+
+                                        self.data.asset_index = Some(index);
+                                    }
+                                }
+                                Err(err) => self.current_error = Some(err.into()),
+                            },
+                            TaggedResponse::Asset(result) => match result {
+                                Ok(()) => {
+                                    if versions.versions[self.data.selected_version] == tag {
+                                        self.data.assets = true;
+                                    }
+                                }
+                                Err(err) => self.current_error = Some(err.into()),
+                            },
+                            TaggedResponse::Jar(res) => match res {
+                                Ok(jar) => {
+                                    if versions.versions[self.data.selected_version] == tag {
+                                        self.data.jar_path = Some(jar);
+                                    }
+                                }
+                                Err(err) => self.current_error = Some(err.into()),
+                            },
+                        }
+                    }
                 }
             }
         }
@@ -216,13 +236,13 @@ impl LauncherGui {
             self.launcher.clone(),
             index.clone(),
             tag.clone(),
-            Path::new("./assets"),
+            self.launcher_path.clone(),
         );
         self.rt.future(future);
         let future = get_libraries(
             self.launcher.clone(),
             libraries,
-            Path::new("./"),
+            self.launcher_path.clone(),
             self.data.total_libraries.clone(),
             self.data.finished_libraries.clone(),
             tag.clone(),
@@ -231,25 +251,24 @@ impl LauncherGui {
         let future = get_jar(
             self.launcher.clone(),
             json.clone(),
-            Path::new("./versions"),
-            self.data.total_libraries.clone(),
-            self.data.finished_libraries.clone(),
+            self.launcher_path.clone(),
+            self.data.total_jar.clone(),
+            self.data.finished_jar.clone(),
             tag.clone(),
         );
         self.rt.future(future);
     }
 
     fn maybe_launch(&self) -> bool {
-        if let (Some(class_path), Some(json), Some(acc)) = (
+        if let (Some(class_path), Some(json), Some(acc), Some(jar_path)) = (
             &self.data.class_path,
             &self.data.version_json,
             &self.player.account,
+            &self.data.jar_path,
         ) {
             if self.data.assets && self.data.launching {
-                let dir = Path::new("./");
-
                 let jvm = if let Some(jvm) = &self.java_path {
-                    jvm
+                    jvm.as_ref()
                 } else {
                     "java"
                 };
@@ -257,14 +276,14 @@ impl LauncherGui {
                 launcher_core::launch_game(
                     jvm,
                     json,
-                    dir,
-                    &dir.join("assets"),
+                    &self.launcher_path,
+                    &self.launcher_path.join("assets"),
                     acc,
                     CLIENT_ID,
                     "0",
                     "Synth Launcher",
                     "0.1.0",
-                    &format!("{}{}", class_path, &self.data.jar_path),
+                    &format!("{}{}", class_path, jar_path),
                 );
                 !self.data.launching
             } else {
@@ -296,7 +315,7 @@ impl LauncherGui {
             let string = format!("Asset Progress: {:.2} %", percentage(finished, total));
             ui.label(string);
 
-            if !self.data.jar {
+            if self.data.jar_path.is_none() {
                 let maybe_total = self.data.total_jar.load(Ordering::Relaxed);
                 let finished = self.data.finished_jar.load(Ordering::Relaxed);
 
@@ -312,11 +331,18 @@ impl LauncherGui {
         });
     }
 
+    fn send_message(&self, contents: Contents) {
+        self.rt.send_with_message(Message {
+            path: self.launcher_path.clone(),
+            contents,
+        });
+    }
+
     fn on_start(&self) {
         if !self.started {
             self.rt.future(get_default_version_response());
-            self.rt.send_with_message(Message::Auth);
-            self.rt.send_with_message(Message::Versions);
+            self.send_message(Contents::Auth);
+            self.send_message(Contents::Versions);
         }
     }
 }
@@ -326,8 +352,9 @@ impl eframe::App for LauncherGui {
         // For events that only happen on start
         self.on_start();
         self.started = true;
-
         self.update_state(ctx);
+
+        let mut config_updated = false;
 
         if let Some(error) = &self.current_error {
             egui::Window::new("Help").auto_sized().show(ctx, |ui| {
@@ -382,12 +409,13 @@ impl eframe::App for LauncherGui {
                                 if ui.selectable_value(selected, index, &version.id).clicked() {
                                     let launcher = self.launcher.clone();
                                     let version = version.clone();
-                                    let path = Path::new("./versions");
+                                    let path = self.launcher_path.clone();
 
                                     if let Some(json) = &self.data.version_json {
                                         if version.id != json.id() {
                                             self.data.version_json = None;
                                             self.data.class_path = None;
+                                            self.data.jar_path = None;
                                             self.data.assets = false;
                                             self.rt.future(get_version(launcher, version, path));
                                         }
@@ -398,23 +426,35 @@ impl eframe::App for LauncherGui {
                             })
                         });
 
-                    egui::ComboBox::from_id_source("Java Selector").show_ui(ui, |ui| {
-                        // TODO: Config Needed
+                    egui::ComboBox::from_id_source("Java Selector").selected_text(self.jvm_name.as_str()).show_ui(ui, |ui| {
+                        if ui.button("Default").clicked() {
+                            self.jvm_name = Rc::new("Default".into());
+                            self.rt.future(get_default_version_response());
+                        }
+
+                        for jvm in &self.config.jvms {
+                            if ui.button(jvm.name.as_str()).clicked() {
+                                self.jvm_name = jvm.name.clone();
+                                self.java_path = Some(jvm.path.clone());
+                                let (_vendor, version) = get_vendor_major_version(&jvm.path);
+                                self.java_version = version;
+                            }
+                        }
                     });
 
-                    let text = if self.java_version != u32::MAX {
-                        self.java_version.to_string()
+                    if self.java_version != u32::MAX {
+                        ui.label(format!("Java Version: {}", self.java_version));
                     } else {
-                        String::from("Select Java Version")
+                        ui.label("No Java Version");
                     };
 
-                    ui.label(format!("Java Version: {text}"));
 
-                    if ui.button("Select Java Version").clicked() {
+                    if ui.button("Add Java Version").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_file() {
-                            let path: Arc<str> = path.display().to_string().into();
-                            self.rt.future(get_major_version_response(path.clone()));
-                            self.java_path = Some(path);
+                            let path: Rc<String> = path.display().to_string().into();
+                            let (vendor, version) = get_vendor_major_version(&path);
+                            self.config.jvms.push(JVM { path, name: Rc::new(format!("{vendor} {version}")) });
+                            config_updated = true;
                         }
                     }
 
@@ -448,14 +488,112 @@ impl eframe::App for LauncherGui {
 
             self.data.launching = self.maybe_launch();
         });
+
+        if config_updated {
+            let bytes = toml::to_string_pretty(&self.config).unwrap();
+            self.config_file.write_all(bytes.as_bytes()).unwrap();
+        }
     }
 }
 
+fn check_config() -> Result<(PathBuf, File, Config), Error> {
+    let home = home::home_dir().unwrap();
+
+    let mut file: File;
+    let config: Config;
+
+    if home.join("config.toml").exists() {
+        file = File::open("config.toml")?;
+        let mut buffer = String::new();
+        file.read_to_string(&mut buffer)?;
+        config = toml::from_str(&buffer)?;
+    } else {
+        file = File::create("config.toml")?;
+        config = Config::default();
+    }
+
+    Ok((home, file, config))
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct Config {
+    jvms: Vec<JVM>,
+    accounts: Vec<Account>
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct JVM {
+    path: Rc<String>,
+    name: Rc<String>,
+}
+
 fn main() {
+    let (home, config_file, config) = check_config().unwrap();
+
     eframe::run_native(
         "Test App",
         eframe::NativeOptions::default(),
-        Box::new(|cc| Box::new(LauncherGui::new(cc))),
+        Box::new(|cc| LauncherGui::new(cc, home, config_file, config)),
     )
     .unwrap();
+}
+
+#[derive(Debug)]
+enum Error {
+    Reqwest(reqwest::Error),
+    Tokio(tokio::io::Error),
+    SerdeJson(serde_json::Error),
+    Toml(toml::de::Error),
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(value: reqwest::Error) -> Self {
+        Error::Reqwest(value)
+    }
+}
+
+impl From<tokio::io::Error> for Error {
+    fn from(value: tokio::io::Error) -> Self {
+        Error::Tokio(value)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(value: serde_json::Error) -> Self {
+        Error::SerdeJson(value)
+    }
+}
+
+impl From<toml::de::Error> for Error {
+    fn from(value: toml::de::Error) -> Self {
+        Error::Toml(value)
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            Error::Reqwest(err) => err.to_string(),
+            Error::Tokio(err) => err.to_string(),
+            Error::SerdeJson(err) => err.to_string(),
+            Error::Toml(err) => err.to_string(),
+        };
+        write!(f, "{}", str)
+    }
+}
+
+impl From<launcher_core::Error> for Error {
+    fn from(value: launcher_core::Error) -> Self {
+        match value {
+            launcher_core::Error::Reqwest(e) => {
+                Error::Reqwest(e)
+            }
+            launcher_core::Error::Tokio(e) => {
+                Error::Tokio(e)
+            }
+            launcher_core::Error::SerdeJson(e) => {
+                Error::SerdeJson(e)
+            }
+        }
+    }
 }

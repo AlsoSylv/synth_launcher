@@ -5,14 +5,16 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[profile.release]
-lto = true
-
 [dependencies]
 rfd = "0.12"
+home = "0.5"
 eframe.workspace = true
 launcher_core.workspace = true
 async_bridge.workspace = true
 async-channel.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json.workspace = true
+toml = "0.8"
+keyring = "2.1.0"
