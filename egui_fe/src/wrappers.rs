@@ -82,7 +82,6 @@ pub async fn get_major_version_response(jvm: Arc<String>) -> Response {
 }
 
 pub async fn get_default_version_response() -> Response {
-    println!("H");
     Response::DefaultJavaVersion(get_major_version("java").await)
 }
 

@@ -13,7 +13,7 @@ use std::sync::{
     Arc,
 };
 
-use eframe::egui::{self, Button, Label, Sense, Style};
+use eframe::egui::{self, Button, Label, Sense};
 use launcher_core::account::types::Account;
 use launcher_core::{
     types::{AssetIndexJson, VersionJson, VersionManifest},
@@ -49,7 +49,6 @@ struct LauncherGui {
     // Path to JVM, if changed
     // Flipped once for startup tasks
     started: bool,
-    config_file: File,
     config: Config,
 }
 
@@ -97,7 +96,7 @@ struct MCData {
 }
 
 impl LauncherGui {
-    fn new(cc: &eframe::CreationContext, home_dir: PathBuf, config_file: File, config: Config) -> Box<Self> {
+    fn new(cc: &eframe::CreationContext, data_dir: PathBuf, config: Config) -> Box<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .worker_threads(4)
@@ -130,13 +129,12 @@ impl LauncherGui {
                 selected_version: usize::MAX,
                 ..Default::default()
             },
-            launcher_path: Arc::new(home_dir),
+            launcher_path: Arc::new(data_dir),
             java_version: u32::MAX,
             current_error: None,
             java_path: None,
             jvm_name: Rc::new("Default".into()),
             started: false,
-            config_file,
             config
         }.into()
     }
@@ -147,20 +145,27 @@ impl LauncherGui {
             match message {
                 Response::Versions(version) => match version {
                     Ok(versions) => self.data.versions = Some(versions),
-                    Err(err) => self.current_error = Some(err.into()),
+                    Err(err) => {
+                        dbg!("{}", &err);
+                        self.current_error = Some(err.into())
+                    },
                 },
                 Response::Version(version) => match version {
                     Ok(json) => self.data.version_json = Some(json.into()),
-                    Err(err) => self.current_error = Some(err.into()),
+                    Err(err) => {
+                        dbg!("{}", &err);
+                        self.current_error = Some(err.into())
+                    },
                 },
                 Response::Auth(res) => match res {
                     Ok(acc) => self.player.account = Some(acc),
-                    Err(err) => self.current_error = Some(err.into()),
+                    Err(err) => {
+                        dbg!("{}", &err);
+                        self.current_error = Some(err.into())
+                    },
                 },
                 Response::JavaMajorVersion(version) | Response::DefaultJavaVersion(version) => {
-                    println!("H");
                     self.java_version = version.unwrap();
-                    println!("{}", self.java_version);
                 }
                 Response::Tagged(response, tag) => {
                     if let Some(versions) = &self.data.versions {
@@ -477,42 +482,45 @@ impl eframe::App for LauncherGui {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let mut style = Style::default();
-            style.visuals.button_frame = true;
-
-            ui.set_style(style);
-
-            if self.data.launching {
-                self.progress_window(ctx);
-            }
-
-            self.data.launching = self.maybe_launch();
+            // Why does this panel get created?
         });
+
+        if self.data.launching {
+            self.progress_window(ctx);
+        }
+
+        self.data.launching = self.maybe_launch();
 
         if config_updated {
             let bytes = toml::to_string_pretty(&self.config).unwrap();
-            self.config_file.write_all(bytes.as_bytes()).unwrap();
+            std::fs::write(self.launcher_path.join("config.toml"), bytes.as_bytes()).unwrap();
         }
     }
 }
 
-fn check_config() -> Result<(PathBuf, File, Config), Error> {
-    let home = home::home_dir().unwrap();
+fn check_config() -> Result<(PathBuf, Config), Error> {
+    let app_dir = platform_dirs::AppDirs::new(Some("synth_launcher"), false).unwrap();
 
-    let mut file: File;
     let config: Config;
+    let config_file_loc = app_dir.config_dir.join("config.toml");
 
-    if home.join("config.toml").exists() {
-        file = File::open("config.toml")?;
+    if !app_dir.config_dir.try_exists()? {
+        std::fs::create_dir(&app_dir.config_dir)?;
+    }
+
+    if config_file_loc.exists() {
+        let mut file = File::open(&config_file_loc)?;
         let mut buffer = String::new();
         file.read_to_string(&mut buffer)?;
         config = toml::from_str(&buffer)?;
     } else {
-        file = File::create("config.toml")?;
         config = Config::default();
+        let mut file = File::create(&config_file_loc)?;
+        let string = toml::to_string(&config)?;
+        file.write_all(string.as_bytes())?
     }
 
-    Ok((home, file, config))
+    Ok((app_dir.config_dir, config))
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -528,12 +536,12 @@ struct JVM {
 }
 
 fn main() {
-    let (home, config_file, config) = check_config().unwrap();
+    let (home, config) = check_config().unwrap();
 
     eframe::run_native(
         "Test App",
         eframe::NativeOptions::default(),
-        Box::new(|cc| LauncherGui::new(cc, home, config_file, config)),
+        Box::new(|cc| LauncherGui::new(cc, home, config)),
     )
     .unwrap();
 }
@@ -543,7 +551,8 @@ enum Error {
     Reqwest(reqwest::Error),
     Tokio(tokio::io::Error),
     SerdeJson(serde_json::Error),
-    Toml(toml::de::Error),
+    TomlDE(toml::de::Error),
+    TomlSER(toml::ser::Error)
 }
 
 impl From<reqwest::Error> for Error {
@@ -566,9 +575,16 @@ impl From<serde_json::Error> for Error {
 
 impl From<toml::de::Error> for Error {
     fn from(value: toml::de::Error) -> Self {
-        Error::Toml(value)
+        Error::TomlDE(value)
     }
 }
+
+impl From<toml::ser::Error> for Error {
+    fn from(value: toml::ser::Error) -> Self {
+        Error::TomlSER(value)
+    }
+}
+
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -576,7 +592,8 @@ impl std::fmt::Display for Error {
             Error::Reqwest(err) => err.to_string(),
             Error::Tokio(err) => err.to_string(),
             Error::SerdeJson(err) => err.to_string(),
-            Error::Toml(err) => err.to_string(),
+            Error::TomlDE(err) => err.to_string(),
+            Error::TomlSER(err) => err.to_string(),
         };
         write!(f, "{}", str)
     }

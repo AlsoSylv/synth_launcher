@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 rfd = "0.12"
-home = "0.5"
 eframe.workspace = true
 launcher_core.workspace = true
 async_bridge.workspace = true
@@ -16,5 +15,6 @@ tokio.workspace = true
 reqwest.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 serde_json.workspace = true
+platform-dirs = "0.3.0"
 toml = "0.8"
 keyring = "2.1.0"
