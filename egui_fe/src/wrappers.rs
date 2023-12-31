@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 pub async fn get_asset_index(
     launcher_core: Arc<AsyncLauncher>,
-    asset_index: Arc<AssetIndex>,
+    asset_index: AssetIndex,
     tag: Arc<Version>,
     path: Arc<PathBuf>,
 ) -> Response {
@@ -116,7 +116,7 @@ async fn get_major_version(jvm: &str) -> Result<u32, Error> {
 pub fn get_vendor_major_version(jvm: &str) -> (String, u32) {
     let tmp = std::env::temp_dir();
     let checker_class_file = tmp.join("VersionPrinter.class");
-    std::fs::write(&checker_class_file, CHECKER_CLASS).unwrap();
+    std::fs::write(checker_class_file, CHECKER_CLASS).unwrap();
     let io = std::process::Command::new(jvm)
         .env_clear()
         .current_dir(tmp)
@@ -137,7 +137,7 @@ pub fn get_vendor_major_version(jvm: &str) -> (String, u32) {
     };
 
     let name = name.to_string();
-    let version = version.parse().unwrap_or_else(|_| 0);
+    let version = version.parse().unwrap_or(0);
 
     (name, version)
 }

@@ -66,14 +66,14 @@ impl VersionJson {
         }
     }
 
-    pub fn libraries(&self) -> &Arc<[Library]> {
+    pub fn libraries(&self) -> &Vec<Library> {
         match self {
             VersionJson::Modern(json) => &json.libraries,
             VersionJson::Legacy(json) => &json.libraries,
         }
     }
 
-    pub fn asset_index(&self) -> &Arc<AssetIndex> {
+    pub fn asset_index(&self) -> &AssetIndex {
         match self {
             VersionJson::Modern(json) => &json.asset_index,
             VersionJson::Legacy(json) => &json.asset_index,
@@ -141,19 +141,11 @@ impl Rule {
     pub fn applies(&self) -> bool {
         if let Some(os) = &self.os {
             if os.name == OS {
-                if self.action == Action::Allow {
-                    true
-                } else {
-                    false
-                }
+                self.action == Action::Allow
             } else {
                 false
             }
-        } else if self.action == Action::Allow {
-            true
-        } else {
-            false
-        }
+        } else { self.action == Action::Allow }
     }
 
     pub fn native(&self) -> bool {
@@ -230,8 +222,6 @@ pub use legacy::Legacy;
 pub use modern::Modern;
 
 pub mod modern {
-    use std::sync::Arc;
-
     use super::{Action, AssetIndex, Library};
     use serde::{Deserialize, Serialize};
 
@@ -240,7 +230,7 @@ pub mod modern {
     #[serde(deny_unknown_fields)]
     pub struct Modern {
         pub arguments: Arguments,
-        pub asset_index: Arc<AssetIndex>,
+        pub asset_index: AssetIndex,
         pub assets: String,
         pub compliance_level: i64,
         pub downloads: WelcomeDownloads,
@@ -253,7 +243,7 @@ pub mod modern {
         pub time: String,
         #[serde(rename = "type")]
         pub welcome_type: String,
-        pub libraries: Arc<[Library]>,
+        pub libraries: Vec<Library>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -377,8 +367,6 @@ pub mod modern {
 }
 
 pub mod legacy {
-    use std::sync::Arc;
-
     use super::{AssetIndex, Library};
     use serde::{Deserialize, Serialize};
 
@@ -386,13 +374,13 @@ pub mod legacy {
     #[serde(rename_all = "camelCase")]
     #[serde(deny_unknown_fields)]
     pub struct Legacy {
-        pub asset_index: Arc<AssetIndex>,
+        pub asset_index: AssetIndex,
         pub assets: String,
         pub compliance_level: Option<i64>,
         pub downloads: Downloads,
         pub id: String,
         pub java_version: Option<JavaVersion>,
-        pub libraries: Arc<[Library]>,
+        pub libraries: Vec<Library>,
         pub logging: Option<Logging>,
         pub main_class: String,
         pub minecraft_arguments: String,

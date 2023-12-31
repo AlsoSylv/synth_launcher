@@ -7,7 +7,6 @@ use worker_logic::*;
 use wrappers::*;
 
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -28,7 +27,6 @@ use serde::{Deserialize, Serialize};
 // TODO: Make instances, must be savable to disk, maybe using RON?: Json Format
 // TODO: Redo error handling, fields that can error should hold Result<T, E>
 // UPDATE: We could also add a tag to the error? Not sure. Constant Error checking would suck.
-// TODO: Config file/Config tx/rx setup: TOML
 struct LauncherGui {
     // Async thread pool to handle futures
     rt: async_bridge::Runtime<Message, Response, State>,
@@ -43,12 +41,10 @@ struct LauncherGui {
     launcher_path: Arc<PathBuf>,
     // Current major java version
     java_version: u32,
-    java_path: Option<Rc<String>>,
-    jvm_name: Rc<String>,
+    jvm_index: Option<usize>,
     current_error: Option<Error>,
     // Path to JVM, if changed
     // Flipped once for startup tasks
-    started: bool,
     config: Config,
 }
 
@@ -96,7 +92,9 @@ struct MCData {
 }
 
 impl LauncherGui {
-    fn new(cc: &eframe::CreationContext, data_dir: PathBuf, config: Config) -> Box<Self> {
+    fn new(cc: &eframe::CreationContext) -> Box<Self> {
+        let (config_dir, config) = check_config().unwrap();
+
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .worker_threads(4)
@@ -119,6 +117,12 @@ impl LauncherGui {
             rt,
         );
 
+        let launcher_path = Arc::new(config_dir);
+
+        rt.future(get_default_version_response());
+        send_message(&rt, Contents::Auth, &launcher_path);
+        send_message(&rt, Contents::Versions, &launcher_path);
+
         LauncherGui {
             rt,
             rx,
@@ -129,12 +133,10 @@ impl LauncherGui {
                 selected_version: usize::MAX,
                 ..Default::default()
             },
-            launcher_path: Arc::new(data_dir),
+            launcher_path,
             java_version: u32::MAX,
             current_error: None,
-            java_path: None,
-            jvm_name: Rc::new("Default".into()),
-            started: false,
+            jvm_index: None,
             config
         }.into()
     }
@@ -232,14 +234,14 @@ impl LauncherGui {
     }
 
     fn prepare_launch(&self, json: &Arc<VersionJson>, manifest: &VersionManifest) {
-        let libraries = json.libraries().clone();
+        let libraries = json.libraries().clone().into();
         let index = json.asset_index().clone();
         let current = self.data.selected_version;
         let tag = manifest.versions[current].clone();
 
         let future = get_asset_index(
             self.launcher.clone(),
-            index.clone(),
+            index,
             tag.clone(),
             self.launcher_path.clone(),
         );
@@ -272,8 +274,8 @@ impl LauncherGui {
             &self.data.jar_path,
         ) {
             if self.data.assets && self.data.launching {
-                let jvm = if let Some(jvm) = &self.java_path {
-                    jvm.as_ref()
+                let jvm = if let Some(jvm) = self.jvm_index {
+                    &self.config.jvms[jvm].path
                 } else {
                     "java"
                 };
@@ -335,28 +337,17 @@ impl LauncherGui {
             ctx.request_repaint();
         });
     }
+}
 
-    fn send_message(&self, contents: Contents) {
-        self.rt.send_with_message(Message {
-            path: self.launcher_path.clone(),
-            contents,
-        });
-    }
-
-    fn on_start(&self) {
-        if !self.started {
-            self.rt.future(get_default_version_response());
-            self.send_message(Contents::Auth);
-            self.send_message(Contents::Versions);
-        }
-    }
+fn send_message<R, M>(rt: &async_bridge::Runtime<Message, R, M>, contents: Contents, launcher_path: &Arc<PathBuf>) where R: Send, M: Clone + Send + Sync {
+    rt.send_with_message(Message {
+        path: launcher_path.clone(),
+        contents,
+    });
 }
 
 impl eframe::App for LauncherGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // For events that only happen on start
-        self.on_start();
-        self.started = true;
         self.update_state(ctx);
 
         let mut config_updated = false;
@@ -391,7 +382,7 @@ impl eframe::App for LauncherGui {
         let height = size.height();
 
         egui::SidePanel::left("General Panel")
-            .default_width(width * 0.1)
+            .exact_width(width * 0.1)
             .resizable(false)
             .show(ctx, |ui| {
                 if let Some(versions) = &self.data.versions {
@@ -431,16 +422,21 @@ impl eframe::App for LauncherGui {
                             })
                         });
 
-                    egui::ComboBox::from_id_source("Java Selector").selected_text(self.jvm_name.as_str()).show_ui(ui, |ui| {
+                    let selected_text = if let Some(jvm_index) = self.jvm_index {
+                        &self.config.jvms[jvm_index].name
+                    } else {
+                        "Default"
+                    };
+
+                    egui::ComboBox::from_id_source("Java Selector").wrap(true).selected_text(selected_text).show_ui(ui, |ui| {
                         if ui.button("Default").clicked() {
-                            self.jvm_name = Rc::new("Default".into());
+                            self.jvm_index = None;
                             self.rt.future(get_default_version_response());
                         }
 
-                        for jvm in &self.config.jvms {
+                        for (index, jvm) in self.config.jvms.iter().enumerate() {
                             if ui.button(jvm.name.as_str()).clicked() {
-                                self.jvm_name = jvm.name.clone();
-                                self.java_path = Some(jvm.path.clone());
+                                self.jvm_index = Some(index);
                                 let (_vendor, version) = get_vendor_major_version(&jvm.path);
                                 self.java_version = version;
                             }
@@ -456,9 +452,9 @@ impl eframe::App for LauncherGui {
 
                     if ui.button("Add Java Version").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_file() {
-                            let path: Rc<String> = path.display().to_string().into();
+                            let path = path.display().to_string();
                             let (vendor, version) = get_vendor_major_version(&path);
-                            self.config.jvms.push(JVM { path, name: Rc::new(format!("{vendor} {version}")) });
+                            self.config.jvms.push(Jvm { path, name: format!("{vendor} {version}") });
                             config_updated = true;
                         }
                     }
@@ -525,23 +521,22 @@ fn check_config() -> Result<(PathBuf, Config), Error> {
 
 #[derive(Default, Deserialize, Serialize)]
 struct Config {
-    jvms: Vec<JVM>,
+    jvms: Vec<Jvm>,
     accounts: Vec<Account>
 }
 
 #[derive(Default, Deserialize, Serialize)]
-struct JVM {
-    path: Rc<String>,
-    name: Rc<String>,
+struct Jvm {
+    path: String,
+    name: String,
 }
 
 fn main() {
-    let (home, config) = check_config().unwrap();
 
     eframe::run_native(
         "Test App",
         eframe::NativeOptions::default(),
-        Box::new(|cc| LauncherGui::new(cc, home, config)),
+        Box::new(|cc| LauncherGui::new(cc)),
     )
     .unwrap();
 }
