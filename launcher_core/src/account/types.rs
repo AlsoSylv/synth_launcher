@@ -72,7 +72,7 @@ pub struct Item {
     pub signature: String,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub id: String,
@@ -83,7 +83,7 @@ pub struct Profile {
     pub profile_actions: HashMap<String, String>,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Skin {
     pub id: String,
@@ -94,7 +94,7 @@ pub struct Skin {
     pub texture_key: String,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Cape {
     pub id: String,
@@ -103,7 +103,7 @@ pub struct Cape {
     pub alias: String,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Account {
     pub active: bool,

@@ -8,7 +8,7 @@ use launcher_core::account::types::Account;
 use launcher_core::types::{AssetIndexJson, Version, VersionJson, VersionManifest};
 use launcher_core::Error;
 use reqwest::Client;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
@@ -20,14 +20,14 @@ pub struct Message {
 }
 pub enum Contents {
     Versions,
-    Auth,
+    Auth(Option<Arc<str>>),
 }
 
 pub enum Response {
     Versions(Result<VersionManifest, Error>),
     Version(Result<Box<VersionJson>, Error>),
     Tagged(TaggedResponse, Arc<Version>),
-    Auth(Result<Account, Error>),
+    Auth(Result<(Account, String), Error>),
     JavaMajorVersion(Result<u32, Error>),
     DefaultJavaVersion(Result<u32, Error>),
 }
@@ -65,9 +65,9 @@ pub fn worker_event_loop(
                     .await;
                 Response::Versions(versions)
             }
-            Contents::Auth => {
+            Contents::Auth(string) => {
                 let result =
-                    auth_or_refresh(&client, &tx, &message.path.join("refresh.txt"), CLIENT_ID).await;
+                    auth_or_refresh(&client, &tx, string.as_deref(), CLIENT_ID).await;
                 Response::Auth(result)
             }
         }
@@ -77,13 +77,11 @@ pub fn worker_event_loop(
 async fn auth_or_refresh(
     client: &Client,
     tx: &Sender<EarlyMessage>,
-    path: &Path,
+    refresh_token: Option<&str>,
     client_id: &str,
-) -> Result<Account, Error> {
-    let exists = tokio::fs::try_exists(path).await?;
-    let auth_res = if exists {
-        let token = tokio::fs::read_to_string(path).await?;
-        refresh_token_response(client, &token, client_id)
+) -> Result<(Account, String), Error> {
+    let auth_res = if let Some(token) = refresh_token {
+        refresh_token_response(client, token, client_id)
             .await?
             .into()
     } else {
@@ -123,8 +121,6 @@ async fn auth_or_refresh(
 
     let profile = minecraft_profile_response(&mc_res.access_token, client).await?;
 
-    tokio::fs::write(path, &auth_res.refresh_token).await?;
-
     use std::time::{Duration, SystemTime};
 
     let expires_in = Duration::from_secs(auth_res.expires_in);
@@ -140,5 +136,5 @@ async fn auth_or_refresh(
         profile,
     };
 
-    Ok(account)
+    Ok((account, auth_res.refresh_token))
 }

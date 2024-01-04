@@ -2,7 +2,7 @@ mod worker_logic;
 mod wrappers;
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use worker_logic::*;
 use wrappers::*;
 
@@ -11,6 +11,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
+use std::time::SystemTime;
 
 use eframe::egui::{self, Button, Label, Sense};
 use launcher_core::account::types::Account;
@@ -45,13 +46,17 @@ struct LauncherGui {
     current_error: Option<Error>,
     // Path to JVM, if changed
     // Flipped once for startup tasks
-    config: Config,
+    launcher_data: LauncherData,
+    // Holds the position of the dots in the loading message
+    loading_place: SystemTime,
+    data_updated: bool,
+    adding_account: bool,
 }
 
 #[derive(Default)]
 struct PlayerData {
     // Player account, if it exists
-    account: Option<Account>,
+    account: Option<usize>,
     // URL for auth, if it exists
     url: Option<String>,
     // Code will always exist if URL does
@@ -93,7 +98,7 @@ struct MCData {
 
 impl LauncherGui {
     fn new(cc: &eframe::CreationContext) -> Box<Self> {
-        let (config_dir, config) = check_config().unwrap();
+        let (config_dir, config) = check_file().unwrap();
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -120,8 +125,11 @@ impl LauncherGui {
         let launcher_path = Arc::new(config_dir);
 
         rt.future(get_default_version_response());
-        send_message(&rt, Contents::Auth, &launcher_path);
         send_message(&rt, Contents::Versions, &launcher_path);
+
+        for acc in &config.accounts {
+            send_message(&rt, Contents::Auth(Some(acc.refresh_token.clone())), &launcher_path);
+        }
 
         LauncherGui {
             rt,
@@ -137,7 +145,10 @@ impl LauncherGui {
             java_version: u32::MAX,
             current_error: None,
             jvm_index: None,
-            config
+            launcher_data: config,
+            loading_place: SystemTime::now(),
+            data_updated: false,
+            adding_account: false
         }.into()
     }
 
@@ -160,7 +171,22 @@ impl LauncherGui {
                     },
                 },
                 Response::Auth(res) => match res {
-                    Ok(acc) => self.player.account = Some(acc),
+                    Ok((acc, refresh)) => {
+                        let into = AccRefreshPair {
+                            account: acc,
+                            refresh_token: refresh.into(),
+                        };
+                        for acc in &mut self.launcher_data.accounts {
+                            if acc.account.profile.id == into.account.profile.id {
+                                *acc = into;
+                                self.data_updated = true;
+                                return;
+                            }
+                        }
+                        self.launcher_data.accounts.push(into);
+                        self.adding_account = false;
+                        self.data_updated = true;
+                    },
                     Err(err) => {
                         dbg!("{}", &err);
                         self.current_error = Some(err.into())
@@ -270,12 +296,12 @@ impl LauncherGui {
         if let (Some(class_path), Some(json), Some(acc), Some(jar_path)) = (
             &self.data.class_path,
             &self.data.version_json,
-            &self.player.account,
+            self.player.account,
             &self.data.jar_path,
         ) {
             if self.data.assets && self.data.launching {
                 let jvm = if let Some(jvm) = self.jvm_index {
-                    &self.config.jvms[jvm].path
+                    &self.launcher_data.jvms[jvm].path
                 } else {
                     "java"
                 };
@@ -285,7 +311,7 @@ impl LauncherGui {
                     json,
                     &self.launcher_path,
                     &self.launcher_path.join("assets"),
-                    acc,
+                    &self.launcher_data.accounts[acc].account,
                     CLIENT_ID,
                     "0",
                     "Synth Launcher",
@@ -350,15 +376,13 @@ impl eframe::App for LauncherGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.update_state(ctx);
 
-        let mut config_updated = false;
-
         if let Some(error) = &self.current_error {
             egui::Window::new("Help").auto_sized().show(ctx, |ui| {
                 ui.label(error.to_string());
             });
         }
 
-        if self.player.account.is_none() {
+        if self.adding_account {
             egui::Window::new("Login").auto_sized().show(ctx, |ui| {
                 if let (Some(url), Some(code)) = (&self.player.url, &self.player.code) {
                     let hyper = egui::Hyperlink::from_label_and_url("Click here to login", url);
@@ -423,7 +447,7 @@ impl eframe::App for LauncherGui {
                         });
 
                     let selected_text = if let Some(jvm_index) = self.jvm_index {
-                        &self.config.jvms[jvm_index].name
+                        &self.launcher_data.jvms[jvm_index].name
                     } else {
                         "Default"
                     };
@@ -434,7 +458,7 @@ impl eframe::App for LauncherGui {
                             self.rt.future(get_default_version_response());
                         }
 
-                        for (index, jvm) in self.config.jvms.iter().enumerate() {
+                        for (index, jvm) in self.launcher_data.jvms.iter().enumerate() {
                             if ui.button(jvm.name.as_str()).clicked() {
                                 self.jvm_index = Some(index);
                                 let (_vendor, version) = get_vendor_major_version(&jvm.path);
@@ -454,9 +478,30 @@ impl eframe::App for LauncherGui {
                         if let Some(path) = rfd::FileDialog::new().pick_file() {
                             let path = path.display().to_string();
                             let (vendor, version) = get_vendor_major_version(&path);
-                            self.config.jvms.push(Jvm { path, name: format!("{vendor} {version}") });
-                            config_updated = true;
+                            self.launcher_data.jvms.push(Jvm { path, name: format!("{vendor} {version}") });
+                            self.data_updated = true;
                         }
+                    }
+
+                    if let Some(acc_idx) = &mut self.player.account {
+                        let name = &self.launcher_data.accounts[*acc_idx].account.profile.name;
+
+                        egui::ComboBox::from_id_source("Account Picker").wrap(true).selected_text(name).show_ui(ui, |ui| {
+                            for (idx, acc) in self.launcher_data.accounts.iter().enumerate() {
+                                ui.selectable_value(acc_idx, idx, &acc.account.profile.name);
+                            }
+                        });
+                    } else if self.launcher_data.accounts.is_empty() {
+                        ui.label("No Accounts");
+                    } else {
+                        self.player.account = Some(0)
+                    };
+
+                    let button = Button::new("Add Account");
+
+                    if ui.add_enabled(!self.adding_account, button).clicked() {
+                        self.rt.send_with_message(Message { path: self.launcher_path.clone(), contents: Contents::Auth(None) });
+                        self.adding_account = true;
                     }
 
                     let button = Button::new("Play");
@@ -473,7 +518,15 @@ impl eframe::App for LauncherGui {
                         ui.add_enabled(false, button);
                     }
                 } else {
-                    ui.spinner();
+                    let mut loading = "Loading".to_string();
+                    let elapsed = self.loading_place.elapsed().unwrap();
+                    for _ in 0..elapsed.as_secs() {
+                        loading.push('.');
+                    }
+                    if elapsed.as_secs() > 3 { self.loading_place = SystemTime::now() };
+
+                    ui.label(loading);
+                    ctx.request_repaint();
                 }
             });
 
@@ -481,58 +534,62 @@ impl eframe::App for LauncherGui {
             // Why does this panel get created?
         });
 
+        self.data.launching = self.maybe_launch();
+
         if self.data.launching {
             self.progress_window(ctx);
         }
 
-        self.data.launching = self.maybe_launch();
-
-        if config_updated {
-            let bytes = toml::to_string_pretty(&self.config).unwrap();
-            std::fs::write(self.launcher_path.join("config.toml"), bytes.as_bytes()).unwrap();
+        if self.data_updated {
+            let bytes = toml::to_string_pretty(&self.launcher_data).unwrap();
+            std::fs::write(self.launcher_path.join("launcher_data.toml"), bytes.as_bytes()).unwrap();
+            self.data_updated = false;
         }
     }
 }
 
-fn check_config() -> Result<(PathBuf, Config), Error> {
+fn check_file() -> Result<(PathBuf, LauncherData), Error> {
     let app_dir = platform_dirs::AppDirs::new(Some("synth_launcher"), false).unwrap();
 
-    let config: Config;
-    let config_file_loc = app_dir.config_dir.join("config.toml");
+    let launcher_data: LauncherData;
+    let launcher_data_file = app_dir.config_dir.join("launcher_data.toml");
 
     if !app_dir.config_dir.try_exists()? {
         std::fs::create_dir(&app_dir.config_dir)?;
     }
 
-    if config_file_loc.exists() {
-        let mut file = File::open(&config_file_loc)?;
-        let mut buffer = String::new();
-        file.read_to_string(&mut buffer)?;
-        config = toml::from_str(&buffer)?;
+    if launcher_data_file.exists() {
+        let buffer = std::fs::read_to_string(&launcher_data_file)?;
+        launcher_data = toml::from_str(&buffer)?;
     } else {
-        config = Config::default();
-        let mut file = File::create(&config_file_loc)?;
-        let string = toml::to_string(&config)?;
+        launcher_data = LauncherData::default();
+        let mut file = File::create(&launcher_data_file)?;
+        let string = toml::to_string(&launcher_data)?;
         file.write_all(string.as_bytes())?
     }
 
-    Ok((app_dir.config_dir, config))
+    Ok((app_dir.config_dir, launcher_data))
 }
 
 #[derive(Default, Deserialize, Serialize)]
-struct Config {
+struct LauncherData {
     jvms: Vec<Jvm>,
-    accounts: Vec<Account>
+    accounts: Vec<AccRefreshPair>
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
+struct AccRefreshPair {
+    account: Account,
+    refresh_token: Arc<str>
+}
+
+#[derive(Deserialize, Serialize)]
 struct Jvm {
     path: String,
     name: String,
 }
 
 fn main() {
-
     eframe::run_native(
         "Test App",
         eframe::NativeOptions::default(),
