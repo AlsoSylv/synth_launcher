@@ -24,7 +24,6 @@ use serde::{Deserialize, Serialize};
 
 // TODO: Store encrypted auth token for reuse: Use Keyring crate
 // TODO: Document existing UI functionality: In-Progress
-// TODO: Make vector of accounts, allow account selection
 // TODO: Make instances, must be savable to disk, maybe using RON?: Json Format
 // TODO: Redo error handling, fields that can error should hold Result<T, E>
 // UPDATE: We could also add a tag to the error? Not sure. Constant Error checking would suck.

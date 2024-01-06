@@ -478,71 +478,27 @@ pub fn launch_game(
     let mut process = std::process::Command::new(java_path);
     let natives_dir = directory.join("natives");
 
-    match json {
-        types::VersionJson::Modern(modern) => {
-            let args = &modern.arguments;
-            args.jvm.iter().for_each(|arg| match arg {
-                types::modern::JvmElement::JvmClass(class) => {
-                    class.rules.iter().for_each(|rule| {
-                        if let Some(os) = &rule.os.name {
-                            if rule.action == types::Action::Allow && os == OS {
-                                match &class.value {
-                                    types::modern::Value::String(arg) => {
+    if let Some(args) = &json.arguments {
+        args.jvm.iter().for_each(|arg| match arg {
+            types::JvmElement::JvmClass(class) => {
+                class.rules.iter().for_each(|rule| {
+                    if let Some(os) = &rule.os.name {
+                        if rule.action == types::Action::Allow && os == OS {
+                            match &class.value {
+                                types::Value::String(arg) => {
+                                    process.arg(arg);
+                                }
+                                types::Value::StringArray(args) => {
+                                    for arg in args {
                                         process.arg(arg);
-                                    }
-                                    types::modern::Value::StringArray(args) => {
-                                        for arg in args {
-                                            process.arg(arg);
-                                        }
                                     }
                                 }
                             }
                         }
-                    });
-                }
-                types::modern::JvmElement::String(arg) => {
-                    let arg = apply_jvm_args(
-                        arg,
-                        &natives_dir,
-                        launcher_name,
-                        launcher_version,
-                        class_path,
-                    );
-
-                    process.arg(arg);
-                }
-            });
-
-            process.arg(json.main_class());
-
-            for arg in &args.game {
-                match &arg {
-                    types::modern::GameElement::GameClass(_) => {
-                        // This is left empty, as I have not setup support for any of the features here
                     }
-                    types::modern::GameElement::String(arg) => {
-                        let arg = apply_mc_args(
-                            arg, json, directory, asset_root, account, client_id, auth_xuid,
-                        );
-
-                        process.arg(arg);
-                    }
-                }
+                });
             }
-        }
-        types::VersionJson::Legacy(legacy) => {
-            let jvm_args = [
-                "-Djava.library.path=${natives_directory}",
-                "-Djna.tmpdir=${natives_directory}",
-                "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}",
-                "-Dio.netty.native.workdir=${natives_directory}",
-                "-Dminecraft.launcher.brand=${launcher_name}",
-                "-Dminecraft.launcher.version=${launcher_version}",
-                "-cp",
-                "${classpath}",
-            ];
-
-            for arg in jvm_args {
+            types::JvmElement::String(arg) => {
                 let arg = apply_jvm_args(
                     arg,
                     &natives_dir,
@@ -553,18 +509,58 @@ pub fn launch_game(
 
                 process.arg(arg);
             }
+        });
 
-            process.arg(&legacy.main_class);
+        for arg in &args.game {
+            match &arg {
+                types::GameElement::GameClass(_) => {
+                    // This is left empty, as I have not setup support for any of the features here
+                }
+                types::GameElement::String(arg) => {
+                    let arg = apply_mc_args(
+                        arg, json, directory, asset_root, account, client_id, auth_xuid,
+                    );
 
-            let args: Vec<&str> = legacy.minecraft_arguments.split(' ').collect();
-            for arg in args {
-                let arg = apply_mc_args(
-                    arg, json, directory, asset_root, account, client_id, auth_xuid,
-                );
-                process.arg(arg);
+                    process.arg(arg);
+                }
             }
         }
+    } else {
+        let jvm_args = [
+            "-Djava.library.path=${natives_directory}",
+            "-Djna.tmpdir=${natives_directory}",
+            "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}",
+            "-Dio.netty.native.workdir=${natives_directory}",
+            "-Dminecraft.launcher.brand=${launcher_name}",
+            "-Dminecraft.launcher.version=${launcher_version}",
+            "-cp",
+            "${classpath}",
+        ];
+
+        for arg in jvm_args {
+            let arg = apply_jvm_args(
+                arg,
+                &natives_dir,
+                launcher_name,
+                launcher_version,
+                class_path,
+            );
+
+            process.arg(arg);
+        }
     }
+
+    if let Some(args) = &json.minecraft_arguments {
+        let args: Vec<&str> = args.split(' ').collect();
+        for arg in args {
+            let arg = apply_mc_args(
+                arg, json, directory, asset_root, account, client_id, auth_xuid,
+            );
+            process.arg(arg);
+        }
+    }
+
+    process.arg(json.main_class());
 
     std::process::Command::new("java")
         .arg("-version")
@@ -621,7 +617,7 @@ mod tests {
     use reqwest::Client;
     use tokio::io::AsyncWriteExt;
 
-    use crate::{types::VersionJson, AsyncLauncher};
+    use crate::AsyncLauncher;
 
     #[tokio::test]
     async fn test_version_types() {
@@ -650,7 +646,7 @@ mod tests {
             .await
             .unwrap();
         fs::create_dir("./Assets").unwrap();
-        if let Ok(VersionJson::Modern(version)) = launcher
+        if let Ok(version) = launcher
             .get_version_json(&manifest.versions[0], Path::new("./Versions"))
             .await
         {

@@ -35,63 +35,57 @@ pub enum Type {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum VersionJson {
-    Modern(Modern),
-    Legacy(Legacy),
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct VersionJson {
+    pub arguments: Option<Arguments>,
+    pub asset_index: AssetIndex,
+    pub assets: String,
+    pub compliance_level: Option<i64>,
+    pub downloads: WelcomeDownloads,
+    pub id: String,
+    pub java_version: Option<JavaVersion>,
+    pub logging: Option<Logging>,
+    pub main_class: String,
+    pub minecraft_arguments: Option<String>,
+    pub minimum_launcher_version: i64,
+    pub release_time: String,
+    pub time: String,
+    #[serde(rename = "type")]
+    pub welcome_type: String,
+    pub libraries: Vec<Library>,
 }
 
 impl VersionJson {
     /// Shorthand for matching and getting the ID
     pub fn id(&self) -> &str {
-        match self {
-            VersionJson::Modern(json) => &json.id,
-            VersionJson::Legacy(json) => &json.id,
-        }
+        &self.id
     }
 
     /// Refers to the client jar url
     pub fn url(&self) -> &str {
-        match self {
-            VersionJson::Modern(json) => &json.downloads.client.url,
-            VersionJson::Legacy(json) => &json.downloads.client.url,
-        }
+        &self.downloads.client.url
     }
 
     /// Refers to the client jar sha1
     pub fn sha1(&self) -> &str {
-        match self {
-            VersionJson::Modern(json) => &json.downloads.client.sha1,
-            VersionJson::Legacy(json) => &json.downloads.client.sha1,
-        }
+        &self.downloads.client.sha1
     }
 
     pub fn libraries(&self) -> &Vec<Library> {
-        match self {
-            VersionJson::Modern(json) => &json.libraries,
-            VersionJson::Legacy(json) => &json.libraries,
-        }
+        &self.libraries
     }
 
     pub fn asset_index(&self) -> &AssetIndex {
-        match self {
-            VersionJson::Modern(json) => &json.asset_index,
-            VersionJson::Legacy(json) => &json.asset_index,
-        }
+        &self.asset_index
     }
 
     pub fn release_type(&self) -> &str {
-        match self {
-            VersionJson::Modern(json) => &json.welcome_type,
-            VersionJson::Legacy(json) => &json.welcome_type,
-        }
+        &self.welcome_type
     }
 
     pub fn main_class(&self) -> &str {
-        match self {
-            VersionJson::Modern(json) => &json.main_class,
-            VersionJson::Legacy(json) => &json.main_class,
-        }
+        &self.main_class
     }
 }
 
@@ -217,217 +211,124 @@ pub struct Object {
     pub size: i64,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Arguments {
+    pub game: Vec<GameElement>,
+    pub jvm: Vec<JvmElement>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+#[serde(deny_unknown_fields)]
+pub enum GameElement {
+    GameClass(GameClass),
+    String(String),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GameClass {
+    pub rules: Vec<GameRule>,
+    pub value: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+#[serde(deny_unknown_fields)]
+pub enum Value {
+    String(String),
+    StringArray(Vec<String>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GameRule {
+    pub action: Action,
+    pub features: Features,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Features {
+    pub is_demo_user: Option<bool>,
+    pub has_custom_resolution: Option<bool>,
+    pub has_quick_plays_support: Option<bool>,
+    pub is_quick_play_singleplayer: Option<bool>,
+    pub is_quick_play_multiplayer: Option<bool>,
+    pub is_quick_play_realms: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+#[serde(deny_unknown_fields)]
+pub enum JvmElement {
+    JvmClass(JvmClass),
+    String(String),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JvmClass {
+    pub rules: Vec<JvmRule>,
+    pub value: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JvmRule {
+    pub action: Action,
+    pub os: PurpleOs,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PurpleOs {
+    pub name: Option<String>,
+    pub arch: Option<String>,
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WelcomeDownloads {
+    pub client: Jar,
+    pub client_mappings: Option<Jar>,
+    pub server: Option<Jar>,
+    pub server_mappings: Option<Jar>,
+    pub windows_server: Option<Jar>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Jar {
+    pub sha1: String,
+    pub size: i64,
+    pub url: String,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct JavaVersion {
+    pub component: String,
+    pub major_version: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Logging {
+    pub client: LoggingClient,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoggingClient {
+    pub argument: String,
+    pub file: AssetIndex,
+    #[serde(rename = "type")]
+    pub client_type: String,
+}
+
 use crate::OS;
-pub use legacy::Legacy;
-pub use modern::Modern;
-
-pub mod modern {
-    use super::{Action, AssetIndex, Library};
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    #[serde(deny_unknown_fields)]
-    pub struct Modern {
-        pub arguments: Arguments,
-        pub asset_index: AssetIndex,
-        pub assets: String,
-        pub compliance_level: i64,
-        pub downloads: WelcomeDownloads,
-        pub id: String,
-        pub java_version: JavaVersion,
-        pub logging: Logging,
-        pub main_class: String,
-        pub minimum_launcher_version: i64,
-        pub release_time: String,
-        pub time: String,
-        #[serde(rename = "type")]
-        pub welcome_type: String,
-        pub libraries: Vec<Library>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct Arguments {
-        pub game: Vec<GameElement>,
-        pub jvm: Vec<JvmElement>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(untagged)]
-    #[serde(deny_unknown_fields)]
-    pub enum GameElement {
-        GameClass(GameClass),
-        String(String),
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct GameClass {
-        pub rules: Vec<GameRule>,
-        pub value: Value,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(untagged)]
-    #[serde(deny_unknown_fields)]
-    pub enum Value {
-        String(String),
-        StringArray(Vec<String>),
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct GameRule {
-        pub action: Action,
-        pub features: Features,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct Features {
-        pub is_demo_user: Option<bool>,
-        pub has_custom_resolution: Option<bool>,
-        pub has_quick_plays_support: Option<bool>,
-        pub is_quick_play_singleplayer: Option<bool>,
-        pub is_quick_play_multiplayer: Option<bool>,
-        pub is_quick_play_realms: Option<bool>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(untagged)]
-    #[serde(deny_unknown_fields)]
-    pub enum JvmElement {
-        JvmClass(JvmClass),
-        String(String),
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct JvmClass {
-        pub rules: Vec<JvmRule>,
-        pub value: Value,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct JvmRule {
-        pub action: Action,
-        pub os: PurpleOs,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct PurpleOs {
-        pub name: Option<String>,
-        pub arch: Option<String>,
-        pub version: Option<String>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct WelcomeDownloads {
-        pub client: Jar,
-        pub client_mappings: Option<Jar>,
-        pub server: Jar,
-        pub server_mappings: Option<Jar>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct Jar {
-        pub sha1: String,
-        pub size: i64,
-        pub url: String,
-        pub path: Option<String>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    #[serde(deny_unknown_fields)]
-    pub struct JavaVersion {
-        pub component: String,
-        pub major_version: i64,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct Logging {
-        pub client: LoggingClient,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct LoggingClient {
-        pub argument: String,
-        pub file: AssetIndex,
-        #[serde(rename = "type")]
-        pub client_type: String,
-    }
-}
-
-pub mod legacy {
-    use super::{AssetIndex, Library};
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    #[serde(deny_unknown_fields)]
-    pub struct Legacy {
-        pub asset_index: AssetIndex,
-        pub assets: String,
-        pub compliance_level: Option<i64>,
-        pub downloads: Downloads,
-        pub id: String,
-        pub java_version: Option<JavaVersion>,
-        pub libraries: Vec<Library>,
-        pub logging: Option<Logging>,
-        pub main_class: String,
-        pub minecraft_arguments: String,
-        pub minimum_launcher_version: i64,
-        pub release_time: String,
-        pub time: String,
-        #[serde(rename = "type")]
-        pub welcome_type: String,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct Downloads {
-        pub client: Jar,
-        pub server: Option<Jar>,
-        pub windows_server: Option<Jar>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct Jar {
-        pub sha1: String,
-        pub size: i64,
-        pub url: String,
-        pub path: Option<String>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    #[serde(deny_unknown_fields)]
-    pub struct JavaVersion {
-        pub component: String,
-        pub major_version: i64,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct Logging {
-        pub client: LoggingClient,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct LoggingClient {
-        pub argument: String,
-        pub file: AssetIndex,
-        #[serde(rename = "type")]
-        pub client_type: String,
-    }
-}
