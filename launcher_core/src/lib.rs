@@ -511,6 +511,8 @@ pub fn launch_game(
             }
         });
 
+        process.arg(json.main_class());
+
         for arg in &args.game {
             match &arg {
                 types::GameElement::GameClass(_) => {
@@ -548,24 +550,20 @@ pub fn launch_game(
 
             process.arg(arg);
         }
-    }
 
-    if let Some(args) = &json.minecraft_arguments {
-        let args: Vec<&str> = args.split(' ').collect();
-        for arg in args {
-            let arg = apply_mc_args(
-                arg, json, directory, asset_root, account, client_id, auth_xuid,
-            );
-            process.arg(arg);
+        process.arg(json.main_class());
+
+        if let Some(args) = &json.minecraft_arguments {
+            let args: Vec<&str> = args.split(' ').collect();
+            for arg in args {
+                let arg = apply_mc_args(
+                    arg, json, directory, asset_root, account, client_id, auth_xuid,
+                );
+                process.arg(arg);
+            }
         }
     }
 
-    process.arg(json.main_class());
-
-    std::process::Command::new("java")
-        .arg("-version")
-        .spawn()
-        .unwrap();
     process.spawn().unwrap();
 }
 
