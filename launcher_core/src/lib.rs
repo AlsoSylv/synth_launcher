@@ -210,7 +210,7 @@ impl AsyncLauncher {
         );
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
 
-        let object_path = directory.join("objects");
+        let object_path = &directory.join("objects");
         if !tokio::fs::try_exists(&object_path).await? {
             tokio::fs::create_dir(&object_path).await?;
         }
@@ -219,38 +219,34 @@ impl AsyncLauncher {
             .try_for_each_concurrent(16, |asset| {
                 let client = self.client.clone();
                 let mut sha1 = sha1_smol::Sha1::new();
-                let directory = &object_path;
                 async move {
                     let first_two = &asset.hash[0..2];
-                    let dir_path = directory.join(first_two);
+                    let dir_path = object_path.join(first_two);
                     let file_path = dir_path.join(&asset.hash);
 
-                    if !tokio::fs::try_exists(&dir_path).await? {
-                        tokio::fs::create_dir_all(dir_path).await?;
-                    }
-
-                    let url = if tokio::fs::try_exists(&file_path).await? {
+                    if tokio::fs::try_exists(&file_path).await? {
                         let buf = tokio::fs::read(&file_path).await?;
                         sha1.update(&buf);
 
                         let digest = sha1.digest().to_string();
 
-                        if digest != asset.hash {
-                            tokio::fs::remove_file(&file_path).await?;
-                            format!("{}/{}/{}/", ASSET_BASE_URL, first_two, &asset.hash)
-                        } else {
+                        if digest == asset.hash {
                             finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
                             return Ok(());
+                        } else {
+                            tokio::fs::remove_file(&file_path).await?;
                         }
-                    } else {
-                        format!("{}/{}/{}", ASSET_BASE_URL, first_two, &asset.hash)
-                    };
+                    } else if !tokio::fs::try_exists(&dir_path).await? {
+                        tokio::fs::create_dir_all(dir_path).await?;
+                    }
+
+                    let url = format!("{}/{}/{}/", ASSET_BASE_URL, first_two, &asset.hash);
 
                     let response = client.get(url).send().await?;
                     let bytes = response.bytes().await?;
                     tokio::fs::write(&file_path, bytes).await?;
 
-                    finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
                     Ok(())
                 }
             })

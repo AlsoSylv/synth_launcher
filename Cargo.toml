@@ -17,7 +17,7 @@ sha1_smol = "1.0.0"
 serde_json = { version = "1.0" }
 tokio = { version = "1.33", features = ["rt-multi-thread"], default-features = false }
 async-channel = "2.0.0"
-eframe = "0.24.0"
+eframe = "0.25.0"
 launcher_core = { path = "./launcher_core" }
 async_bridge = { path = "./egui_fe/async_bridge" }
 
