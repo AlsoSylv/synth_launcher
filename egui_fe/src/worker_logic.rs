@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 pub const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
 
-
 pub struct Message {
     pub path: Arc<PathBuf>,
     pub contents: Contents,
@@ -66,8 +65,7 @@ pub fn worker_event_loop(
                 Response::Versions(versions)
             }
             Contents::Auth(string) => {
-                let result =
-                    auth_or_refresh(&client, &tx, string.as_deref(), CLIENT_ID).await;
+                let result = auth_or_refresh(&client, &tx, string.as_deref(), CLIENT_ID).await;
                 Response::Auth(result)
             }
         }

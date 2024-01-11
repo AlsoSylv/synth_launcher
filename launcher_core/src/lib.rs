@@ -1,7 +1,8 @@
 extern crate core;
 
 use std::fmt::Display;
-use std::{path::Path, sync::atomic::AtomicUsize};
+use std::path::Path;
+use std::sync::atomic::AtomicU64;
 
 use crate::account::types::Account;
 use futures::{stream, StreamExt, TryStreamExt};
@@ -195,13 +196,16 @@ impl AsyncLauncher {
         &self,
         asset_index: &types::AssetIndexJson,
         directory: &Path,
-        total: &AtomicUsize,
-        finished: &AtomicUsize,
+        total: &AtomicU64,
+        finished: &AtomicU64,
     ) -> Result<(), Error> {
         const ASSET_BASE_URL: &str = "https://resources.download.minecraft.net";
 
         total.store(
-            asset_index.objects.len(),
+            asset_index
+                .objects
+                .values()
+                .fold(0, |acc, val| acc + val.size),
             std::sync::atomic::Ordering::Relaxed,
         );
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -235,7 +239,7 @@ impl AsyncLauncher {
                             tokio::fs::remove_file(&file_path).await?;
                             format!("{}/{}/{}/", ASSET_BASE_URL, first_two, &asset.hash)
                         } else {
-                            finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
                             return Ok(());
                         }
                     } else {
@@ -258,8 +262,8 @@ impl AsyncLauncher {
         libraries: &[types::Library],
         directory: &Path,
         native_dir: &Path,
-        total: &AtomicUsize,
-        finished: &AtomicUsize,
+        total: &AtomicU64,
+        finished: &AtomicU64,
     ) -> Result<String, Error> {
         let mut path = String::new();
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -329,11 +333,11 @@ impl AsyncLauncher {
             #[cfg(windows)]
             path.extend([dir, "/", &artifact.path, ";"]);
 
+            total.fetch_add(artifact.size, std::sync::atomic::Ordering::Relaxed);
+
             Some(Ok::<_, Error>((native, artifact)))
         }))
         .try_for_each_concurrent(16, |(native, artifact)| {
-            total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
             let client = self.client.clone();
             let mut sha1 = sha1_smol::Sha1::new();
             let path = directory.join(Path::new(&artifact.path));
@@ -346,11 +350,13 @@ impl AsyncLauncher {
                     let buf = tokio::fs::read(&path).await?;
                     sha1.update(&buf);
                     if sha1.digest().to_string() == artifact.sha1 {
+                        let len = buf.len() as u64;
+
                         if native {
                             extract_native(native_dir, buf).await?;
                         }
 
-                        finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        finished.fetch_add(len, std::sync::atomic::Ordering::Relaxed);
 
                         return Ok(());
                     } else {
@@ -359,17 +365,20 @@ impl AsyncLauncher {
                 }
 
                 let response = client.get(url).send().await?;
-                let bytes = response.bytes().await?;
+                let mut buf = Vec::with_capacity(artifact.size as usize);
+                let mut stream = response.bytes_stream();
+                while let Some(next) = stream.next().await {
+                    let chunk = next?;
+                    finished.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                    buf.extend(chunk);
+                }
                 tokio::fs::create_dir_all(parent).await?;
 
+                tokio::fs::write(path, &buf).await?;
                 if native {
-                    extract_native(native_dir, bytes.to_vec()).await?;
-                    tokio::fs::write(path, bytes).await?;
-                } else {
-                    tokio::fs::write(path, bytes).await?;
+                    extract_native(native_dir, buf).await?;
                 }
 
-                finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 Ok(())
             }
         })
@@ -382,10 +391,13 @@ impl AsyncLauncher {
         &self,
         version_details: &types::VersionJson,
         directory: &Path,
-        total_bytes: &AtomicUsize,
-        finished_bytes: &AtomicUsize,
+        total_bytes: &AtomicU64,
+        finished_bytes: &AtomicU64,
     ) -> Result<String, Error> {
-        total_bytes.store(0, std::sync::atomic::Ordering::Relaxed);
+        total_bytes.store(
+            version_details.downloads.client.size,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         finished_bytes.fetch_add(0, std::sync::atomic::Ordering::Relaxed);
 
         let id = version_details.id();
@@ -408,13 +420,13 @@ impl AsyncLauncher {
 
         let jar = self.client.get(url).send().await?;
         let len = jar.content_length().unwrap();
-        total_bytes.store(len as usize, std::sync::atomic::Ordering::Relaxed);
+        total_bytes.store(len, std::sync::atomic::Ordering::Relaxed);
 
         let mut stream = jar.bytes_stream();
         while let Some(next) = stream.next().await {
             let chunk = next?;
             file.write_all(&chunk).await?;
-            finished_bytes.fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
+            finished_bytes.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
         }
 
         Ok(str)
@@ -610,7 +622,8 @@ fn apply_mc_args(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path, sync::atomic::AtomicUsize};
+    use std::sync::atomic::AtomicU64;
+    use std::{fs, path::Path};
 
     use reqwest::Client;
     use tokio::io::AsyncWriteExt;
@@ -656,8 +669,8 @@ mod tests {
                     .download_and_store_asset_index(
                         &index,
                         Path::new("./Assets"),
-                        &AtomicUsize::new(0),
-                        &AtomicUsize::new(0),
+                        &AtomicU64::new(0),
+                        &AtomicU64::new(0),
                     )
                     .await
                 {
@@ -689,8 +702,8 @@ mod tests {
                     &libs,
                     Path::new("./Libs"),
                     Path::new("./natives"),
-                    &AtomicUsize::new(0),
-                    &AtomicUsize::new(0),
+                    &AtomicU64::new(0),
+                    &AtomicU64::new(0),
                 )
                 .await
             {

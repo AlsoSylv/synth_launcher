@@ -22,7 +22,7 @@ where
 
 impl<M, R, S> Runtime<M, R, S>
 where
-    S: Clone + Send + Sync + 'static,
+    S: Clone + Send + 'static,
     R: Send + 'static,
     M: Send + 'static,
 {

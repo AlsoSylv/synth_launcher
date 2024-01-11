@@ -3,7 +3,7 @@ use launcher_core::types::{AssetIndex, AssetIndexJson, Library, Version, Version
 use launcher_core::{AsyncLauncher, Error};
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 pub async fn get_asset_index(
@@ -33,8 +33,8 @@ pub async fn get_libraries(
     launcher_core: Arc<AsyncLauncher>,
     libs: Arc<[Library]>,
     path: Arc<PathBuf>,
-    total: Arc<AtomicUsize>,
-    finished: Arc<AtomicUsize>,
+    total: Arc<AtomicU64>,
+    finished: Arc<AtomicU64>,
     tag: Arc<Version>,
 ) -> Response {
     let path = launcher_core
@@ -53,8 +53,8 @@ pub async fn get_jar(
     launcher_core: Arc<AsyncLauncher>,
     json: Arc<VersionJson>,
     path: Arc<PathBuf>,
-    total: Arc<AtomicUsize>,
-    finished: Arc<AtomicUsize>,
+    total: Arc<AtomicU64>,
+    finished: Arc<AtomicU64>,
     tag: Arc<Version>,
 ) -> Response {
     let result = launcher_core
@@ -67,8 +67,8 @@ pub async fn get_assets(
     launcher_core: Arc<AsyncLauncher>,
     index: Arc<AssetIndexJson>,
     path: Arc<PathBuf>,
-    total: Arc<AtomicUsize>,
-    finished: Arc<AtomicUsize>,
+    total: Arc<AtomicU64>,
+    finished: Arc<AtomicU64>,
     tag: Arc<Version>,
 ) -> Response {
     let result = launcher_core

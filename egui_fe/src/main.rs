@@ -7,10 +7,8 @@ use worker_logic::*;
 use wrappers::*;
 
 use std::path::PathBuf;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::atomic::AtomicU64;
+use std::sync::{atomic::Ordering, Arc};
 use std::time::SystemTime;
 
 use eframe::egui::{self, Button, Label, Sense};
@@ -80,19 +78,37 @@ struct MCData {
     jar_path: Option<String>,
     // Total and finished libraries, divide as floats
     // and multiply by 100 to get progress as percentage
-    total_libraries: Arc<AtomicUsize>,
-    finished_libraries: Arc<AtomicUsize>,
+    total_libraries: Arc<AtomicU64>,
+    finished_libraries: Arc<AtomicU64>,
     // Total and finished assets, divide as floats
     // and multiply by 100 to get progress as percentage
-    total_assets: Arc<AtomicUsize>,
-    finished_assets: Arc<AtomicUsize>,
+    total_assets: Arc<AtomicU64>,
+    finished_assets: Arc<AtomicU64>,
     // Total progress downloading the MC jar
-    total_jar: Arc<AtomicUsize>,
-    finished_jar: Arc<AtomicUsize>,
+    total_jar: Arc<AtomicU64>,
+    finished_jar: Arc<AtomicU64>,
     // Whether or not all assets are loaded
     assets: bool,
     // If the launcher is attempting to launch
     launching: bool,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct LauncherData {
+    jvms: Vec<Jvm>,
+    accounts: Vec<AccRefreshPair>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct AccRefreshPair {
+    account: Account,
+    refresh_token: Arc<str>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct Jvm {
+    path: String,
+    name: String,
 }
 
 impl LauncherGui {
@@ -127,7 +143,11 @@ impl LauncherGui {
         send_message(&rt, Contents::Versions, &launcher_path);
 
         for acc in &config.accounts {
-            send_message(&rt, Contents::Auth(Some(acc.refresh_token.clone())), &launcher_path);
+            send_message(
+                &rt,
+                Contents::Auth(Some(acc.refresh_token.clone())),
+                &launcher_path,
+            );
         }
 
         LauncherGui {
@@ -147,8 +167,9 @@ impl LauncherGui {
             launcher_data: config,
             loading_place: SystemTime::now(),
             data_updated: false,
-            adding_account: false
-        }.into()
+            adding_account: false,
+        }
+        .into()
     }
 
     fn update_state(&mut self, _: &egui::Context) {
@@ -160,14 +181,14 @@ impl LauncherGui {
                     Err(err) => {
                         dbg!("{}", &err);
                         self.current_error = Some(err.into())
-                    },
+                    }
                 },
                 Response::Version(version) => match version {
                     Ok(json) => self.data.version_json = Some(json.into()),
                     Err(err) => {
                         dbg!("{}", &err);
                         self.current_error = Some(err.into())
-                    },
+                    }
                 },
                 Response::Auth(res) => match res {
                     Ok((acc, refresh)) => {
@@ -185,11 +206,11 @@ impl LauncherGui {
                         self.launcher_data.accounts.push(into);
                         self.adding_account = false;
                         self.data_updated = true;
-                    },
+                    }
                     Err(err) => {
                         dbg!("{}", &err);
                         self.current_error = Some(err.into())
-                    },
+                    }
                 },
                 Response::JavaMajorVersion(version) | Response::DefaultJavaVersion(version) => {
                     self.java_version = version.unwrap();
@@ -328,8 +349,7 @@ impl LauncherGui {
 
     fn progress_window(&self, ctx: &egui::Context) {
         egui::Window::new("Progress").auto_sized().show(ctx, |ui| {
-            let percentage =
-                |finished: usize, total: usize| -> f64 { (finished as f64 / total as f64) * 100.0 };
+            let percentage = |finished, total| (finished as f64 / total as f64) * 100.0;
 
             let maybe_total = self.data.total_libraries.load(Ordering::Relaxed);
             let finished = self.data.finished_libraries.load(Ordering::Relaxed);
@@ -364,7 +384,14 @@ impl LauncherGui {
     }
 }
 
-fn send_message<R, M>(rt: &async_bridge::Runtime<Message, R, M>, contents: Contents, launcher_path: &Arc<PathBuf>) where R: Send, M: Clone + Send + Sync {
+fn send_message<R, M>(
+    rt: &async_bridge::Runtime<Message, R, M>,
+    contents: Contents,
+    launcher_path: &Arc<PathBuf>,
+) where
+    R: Send,
+    M: Clone + Send + Sync,
+{
     rt.send_with_message(Message {
         path: launcher_path.clone(),
         contents,
@@ -451,20 +478,23 @@ impl eframe::App for LauncherGui {
                         "Default"
                     };
 
-                    egui::ComboBox::from_id_source("Java Selector").wrap(true).selected_text(selected_text).show_ui(ui, |ui| {
-                        if ui.button("Default").clicked() {
-                            self.jvm_index = None;
-                            self.rt.future(get_default_version_response());
-                        }
-
-                        for (index, jvm) in self.launcher_data.jvms.iter().enumerate() {
-                            if ui.button(jvm.name.as_str()).clicked() {
-                                self.jvm_index = Some(index);
-                                let (_vendor, version) = get_vendor_major_version(&jvm.path);
-                                self.java_version = version;
+                    egui::ComboBox::from_id_source("Java Selector")
+                        .wrap(true)
+                        .selected_text(selected_text)
+                        .show_ui(ui, |ui| {
+                            if ui.button("Default").clicked() {
+                                self.jvm_index = None;
+                                self.rt.future(get_default_version_response());
                             }
-                        }
-                    });
+
+                            for (index, jvm) in self.launcher_data.jvms.iter().enumerate() {
+                                if ui.button(jvm.name.as_str()).clicked() {
+                                    self.jvm_index = Some(index);
+                                    let (_vendor, version) = get_vendor_major_version(&jvm.path);
+                                    self.java_version = version;
+                                }
+                            }
+                        });
 
                     if self.java_version != u32::MAX {
                         ui.label(format!("Java Version: {}", self.java_version));
@@ -472,12 +502,14 @@ impl eframe::App for LauncherGui {
                         ui.label("No Java Version");
                     };
 
-
                     if ui.button("Add Java Version").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_file() {
                             let path = path.display().to_string();
                             let (vendor, version) = get_vendor_major_version(&path);
-                            self.launcher_data.jvms.push(Jvm { path, name: format!("{vendor} {version}") });
+                            self.launcher_data.jvms.push(Jvm {
+                                path,
+                                name: format!("{vendor} {version}"),
+                            });
                             self.data_updated = true;
                         }
                     }
@@ -485,11 +517,14 @@ impl eframe::App for LauncherGui {
                     if let Some(acc_idx) = &mut self.player.account {
                         let name = &self.launcher_data.accounts[*acc_idx].account.profile.name;
 
-                        egui::ComboBox::from_id_source("Account Picker").wrap(true).selected_text(name).show_ui(ui, |ui| {
-                            for (idx, acc) in self.launcher_data.accounts.iter().enumerate() {
-                                ui.selectable_value(acc_idx, idx, &acc.account.profile.name);
-                            }
-                        });
+                        egui::ComboBox::from_id_source("Account Picker")
+                            .wrap(true)
+                            .selected_text(name)
+                            .show_ui(ui, |ui| {
+                                for (idx, acc) in self.launcher_data.accounts.iter().enumerate() {
+                                    ui.selectable_value(acc_idx, idx, &acc.account.profile.name);
+                                }
+                            });
                     } else if self.launcher_data.accounts.is_empty() {
                         ui.label("No Accounts");
                     } else {
@@ -499,7 +534,10 @@ impl eframe::App for LauncherGui {
                     let button = Button::new("Add Account");
 
                     if ui.add_enabled(!self.adding_account, button).clicked() {
-                        self.rt.send_with_message(Message { path: self.launcher_path.clone(), contents: Contents::Auth(None) });
+                        self.rt.send_with_message(Message {
+                            path: self.launcher_path.clone(),
+                            contents: Contents::Auth(None),
+                        });
                         self.adding_account = true;
                     }
 
@@ -522,7 +560,9 @@ impl eframe::App for LauncherGui {
                     for _ in 0..elapsed.as_secs() {
                         loading.push('.');
                     }
-                    if elapsed.as_secs() > 3 { self.loading_place = SystemTime::now() };
+                    if elapsed.as_secs() > 3 {
+                        self.loading_place = SystemTime::now()
+                    };
 
                     ui.label(loading);
                     ctx.request_repaint();
@@ -541,7 +581,11 @@ impl eframe::App for LauncherGui {
 
         if self.data_updated {
             let bytes = toml::to_string_pretty(&self.launcher_data).unwrap();
-            std::fs::write(self.launcher_path.join("launcher_data.toml"), bytes.as_bytes()).unwrap();
+            std::fs::write(
+                self.launcher_path.join("launcher_data.toml"),
+                bytes.as_bytes(),
+            )
+            .unwrap();
             self.data_updated = false;
         }
     }
@@ -570,24 +614,6 @@ fn check_file() -> Result<(PathBuf, LauncherData), Error> {
     Ok((app_dir.config_dir, launcher_data))
 }
 
-#[derive(Default, Deserialize, Serialize)]
-struct LauncherData {
-    jvms: Vec<Jvm>,
-    accounts: Vec<AccRefreshPair>
-}
-
-#[derive(Deserialize, Serialize)]
-struct AccRefreshPair {
-    account: Account,
-    refresh_token: Arc<str>
-}
-
-#[derive(Deserialize, Serialize)]
-struct Jvm {
-    path: String,
-    name: String,
-}
-
 fn main() {
     eframe::run_native(
         "Test App",
@@ -603,7 +629,7 @@ enum Error {
     Tokio(tokio::io::Error),
     SerdeJson(serde_json::Error),
     TomlDE(toml::de::Error),
-    TomlSER(toml::ser::Error)
+    TomlSER(toml::ser::Error),
 }
 
 impl From<reqwest::Error> for Error {
@@ -636,7 +662,6 @@ impl From<toml::ser::Error> for Error {
     }
 }
 
-
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let str = match self {
@@ -653,15 +678,9 @@ impl std::fmt::Display for Error {
 impl From<launcher_core::Error> for Error {
     fn from(value: launcher_core::Error) -> Self {
         match value {
-            launcher_core::Error::Reqwest(e) => {
-                Error::Reqwest(e)
-            }
-            launcher_core::Error::Tokio(e) => {
-                Error::Tokio(e)
-            }
-            launcher_core::Error::SerdeJson(e) => {
-                Error::SerdeJson(e)
-            }
+            launcher_core::Error::Reqwest(e) => Error::Reqwest(e),
+            launcher_core::Error::Tokio(e) => Error::Tokio(e),
+            launcher_core::Error::SerdeJson(e) => Error::SerdeJson(e),
         }
     }
 }

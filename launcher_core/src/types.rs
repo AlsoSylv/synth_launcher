@@ -139,7 +139,9 @@ impl Rule {
             } else {
                 false
             }
-        } else { self.action == Action::Allow }
+        } else {
+            self.action == Action::Allow
+        }
     }
 
     pub fn native(&self) -> bool {
@@ -192,7 +194,7 @@ pub struct Classifiers {
 #[serde(deny_unknown_fields)]
 pub struct Artifact {
     pub sha1: String,
-    pub size: i64,
+    pub size: u64,
     pub url: String,
     pub path: String,
 }
@@ -208,7 +210,7 @@ pub struct AssetIndexJson {
 #[serde(deny_unknown_fields)]
 pub struct Object {
     pub hash: String,
-    pub size: i64,
+    pub size: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -303,7 +305,7 @@ pub struct WelcomeDownloads {
 #[serde(deny_unknown_fields)]
 pub struct Jar {
     pub sha1: String,
-    pub size: i64,
+    pub size: u64,
     pub url: String,
     pub path: Option<String>,
 }
