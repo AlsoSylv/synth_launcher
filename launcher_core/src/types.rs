@@ -110,6 +110,17 @@ pub struct Library {
     pub natives: Option<Natives>,
 }
 
+impl Natives {
+    pub fn applies(&self) -> bool {
+        #[cfg(windows)]
+        return self.windows.is_some();
+        #[cfg(target_os = "linux")]
+        return self.linux.is_some();
+        #[cfg(target_os = "mac_os")]
+        return self.osx.is_some();
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Natives {
@@ -134,11 +145,7 @@ pub struct Rule {
 impl Rule {
     pub fn applies(&self) -> bool {
         if let Some(os) = &self.os {
-            if os.name == OS {
-                self.action == Action::Allow
-            } else {
-                false
-            }
+            os.name == OS && self.action == Action::Allow
         } else {
             self.action == Action::Allow
         }

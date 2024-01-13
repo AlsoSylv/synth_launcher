@@ -168,12 +168,9 @@ impl AsyncLauncher {
         let file = directory.join(format!("{}.json", asset_index.id));
 
         if tokio::fs::try_exists(&file).await? {
-            let mut sha1 = sha1_smol::Sha1::new();
             let buf = tokio::fs::read(&file).await?;
 
-            sha1.update(&buf);
-
-            if sha1.digest().to_string() == asset_index.sha1 {
+            if sha1(&buf) == asset_index.sha1 {
                 let val = serde_json::from_slice(&buf)?;
                 return Ok(val);
             }
@@ -205,7 +202,7 @@ impl AsyncLauncher {
             asset_index
                 .objects
                 .values()
-                .fold(0, |acc, val| acc + val.size),
+                .fold(0, |acc, obj| acc + obj.size),
             std::sync::atomic::Ordering::Relaxed,
         );
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -216,39 +213,31 @@ impl AsyncLauncher {
         }
 
         stream::iter(asset_index.objects.values().map(Ok))
-            .try_for_each_concurrent(16, |asset| {
-                let client = self.client.clone();
-                let mut sha1 = sha1_smol::Sha1::new();
-                async move {
-                    let first_two = &asset.hash[0..2];
-                    let dir_path = object_path.join(first_two);
-                    let file_path = dir_path.join(&asset.hash);
+            .try_for_each_concurrent(16, |asset| async {
+                let first_two = &asset.hash[0..2];
+                let dir_path = object_path.join(first_two);
+                let file_path = dir_path.join(&asset.hash);
 
-                    if tokio::fs::try_exists(&file_path).await? {
-                        let buf = tokio::fs::read(&file_path).await?;
-                        sha1.update(&buf);
-
-                        let digest = sha1.digest().to_string();
-
-                        if digest == asset.hash {
-                            finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
-                            return Ok(());
-                        } else {
-                            tokio::fs::remove_file(&file_path).await?;
-                        }
-                    } else if !tokio::fs::try_exists(&dir_path).await? {
-                        tokio::fs::create_dir_all(dir_path).await?;
+                if tokio::fs::try_exists(&file_path).await? {
+                    let buf = tokio::fs::read(&file_path).await?;
+                    if sha1(&buf) == asset.hash {
+                        finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
+                        return Ok(());
+                    } else {
+                        tokio::fs::remove_file(&file_path).await?;
                     }
-
-                    let url = format!("{}/{}/{}/", ASSET_BASE_URL, first_two, &asset.hash);
-
-                    let response = client.get(url).send().await?;
-                    let bytes = response.bytes().await?;
-                    tokio::fs::write(&file_path, bytes).await?;
-
-                    finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
-                    Ok(())
+                } else if !tokio::fs::try_exists(&dir_path).await? {
+                    tokio::fs::create_dir_all(dir_path).await?;
                 }
+
+                let url = format!("{}/{}/{}/", ASSET_BASE_URL, first_two, &asset.hash);
+
+                let response = self.client.get(url).send().await?;
+                let bytes = response.bytes().await?;
+                tokio::fs::write(&file_path, bytes).await?;
+
+                finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
             })
             .await
     }
@@ -262,11 +251,11 @@ impl AsyncLauncher {
         finished: &AtomicU64,
     ) -> Result<String, Error> {
         let mut path = String::new();
+
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
         total.store(0, std::sync::atomic::Ordering::Relaxed);
 
         stream::iter(libraries.iter().filter_map(|library| {
-            let mut native = library.natives.is_some() || library.extract.is_some();
             let dir = directory.to_str().unwrap();
             if let Some(rules) = &library.rules {
                 let mut rule_iter = rules.iter();
@@ -274,51 +263,52 @@ impl AsyncLauncher {
                 if !rule_iter.any(|rule| rule.applies()) {
                     return None;
                 }
+            }
 
-                native |= rule_iter.all(|rule| rule.native());
+            if let Some(natives) = &library.natives {
+                if !natives.applies() {
+                    return None;
+                }
             }
 
             // Move to after rule validation to reduce
             path.reserve_exact(library.name.len() + dir.len() + 2);
 
-            let artifact: &types::Artifact;
-
-            if let Some(classifier) = &library.downloads.classifiers {
-                let option: Option<&types::Artifact>;
-
+            let artifact = if let Some(art) = &library.downloads.artifact {
+                art
+            } else if let Some(classifier) = &library.downloads.classifiers {
                 #[cfg(target_os = "windows")]
-                if classifier.natives_windows.is_some() {
-                    option = classifier.natives_windows.as_ref()
-                } else if cfg!(target_arch = "x86_64") {
-                    option = classifier.natives_windows_64.as_ref()
-                } else if cfg!(target_arch = "x86") {
-                    option = classifier.natives_windows_32.as_ref()
+                if let Some(c) = &classifier.natives_windows {
+                    c
+                } else if cfg!(target_arch = "x84_64") {
+                    if let Some(c) = &classifier.natives_windows_64 {
+                        c
+                    } else {
+                        return None;
+                    }
                 } else {
-                    option = classifier.natives_windows.as_ref()
-                };
+                    return None;
+                }
 
                 #[cfg(target_os = "macos")]
-                if classifier.natives_osx.is_some() {
-                    option = classifier.natives_osx.as_ref()
+                if let Some(c) = &classifier.natives_osx {
+                    c
                 } else {
-                    option = classifier.natives_macos.as_ref()
+                    classifier.natives_macos.as_ref().unwrap()
                 };
 
                 #[cfg(target_os = "linux")]
-                if classifier.natives_linux.is_some() {
-                    option = classifier.natives_linux.as_ref()
-                } else if cfg!(target_arch = "x86_64") {
-                    option = classifier.linux_x86_64.as_ref()
+                if let Some(c) = &classifier.natives_linux {
+                    c
+                } else if cfg!(target_arch = "x84_64") {
+                    if let Some(c) = &classifier.linux_x86_64 {
+                        c
+                    } else {
+                        return None;
+                    }
                 } else {
-                    option = classifier.natives_linux.as_ref()
-                };
-
-                match option {
-                    Some(art) => artifact = art,
-                    None => return None,
+                    return None;
                 }
-            } else if let Some(art) = &library.downloads.artifact {
-                artifact = art;
             } else {
                 unreachable!("Found missing artifact")
             };
@@ -331,21 +321,27 @@ impl AsyncLauncher {
 
             total.fetch_add(artifact.size, std::sync::atomic::Ordering::Relaxed);
 
-            Some(Ok::<_, Error>((native, artifact)))
+            Some(Ok::<_, Error>((artifact, library)))
         }))
-        .try_for_each_concurrent(16, |(native, artifact)| {
-            let client = self.client.clone();
-            let mut sha1 = sha1_smol::Sha1::new();
+        .try_for_each_concurrent(16, |(artifact, library)| {
             let path = directory.join(Path::new(&artifact.path));
-            let url = &artifact.url;
+            async {
+                let mut native = library.natives.is_some() || library.extract.is_some();
 
-            async move {
+                if let Some(rules) = &library.rules {
+                    let mut rule_iter = rules.iter();
+
+                    if !rule_iter.any(|rule| rule.applies()) {
+                        return Ok(());
+                    }
+
+                    native |= rule_iter.all(|rule| rule.native());
+                }
                 let parent = path.parent().unwrap();
 
                 if tokio::fs::try_exists(&path).await? {
                     let buf = tokio::fs::read(&path).await?;
-                    sha1.update(&buf);
-                    if sha1.digest().to_string() == artifact.sha1 {
+                    if sha1(&buf) == artifact.sha1 {
                         let len = buf.len() as u64;
 
                         if native {
@@ -360,7 +356,7 @@ impl AsyncLauncher {
                     }
                 }
 
-                let response = client.get(url).send().await?;
+                let response = self.client.get(&artifact.url).send().await?;
                 let mut buf = Vec::with_capacity(artifact.size as usize);
                 let mut stream = response.bytes_stream();
                 while let Some(next) = stream.next().await {
@@ -404,10 +400,8 @@ impl AsyncLauncher {
         let str = file.to_str().unwrap().to_string();
 
         if tokio::fs::try_exists(&file).await? {
-            let mut hasher = sha1_smol::Sha1::new();
             let buf = tokio::fs::read(&file).await?;
-            hasher.update(&buf);
-            if hasher.digest().to_string() == version_details.sha1() {
+            if sha1(&buf) == version_details.sha1() {
                 return Ok(str);
             }
         }
@@ -466,6 +460,12 @@ async fn extract_native(native_dir: &Path, buf: Vec<u8>) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+fn sha1(buf: &[u8]) -> String {
+    let mut sha1 = sha1_smol::Sha1::new();
+    sha1.update(buf);
+    sha1.digest().to_string()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -683,7 +683,7 @@ mod tests {
             .get_version_manifest(Path::new("./Versions"))
             .await
             .unwrap();
-        // fs::create_dir("./Libs").unwrap();
+        let _ = fs::create_dir("./Libs");
         for version in &manifest.versions {
             let libs = match launcher
                 .get_version_json(version, Path::new("./Versions"))
