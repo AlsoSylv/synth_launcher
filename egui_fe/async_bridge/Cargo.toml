@@ -9,3 +9,7 @@ edition = "2021"
 tokio.workspace = true
 async-channel.workspace = true
 eframe.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+tokio = { version = "*", features = ["full"] }

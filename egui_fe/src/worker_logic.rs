@@ -49,25 +49,19 @@ pub enum EarlyMessage {
     LinkCode((String, String)),
 }
 
-pub fn worker_event_loop(
-    message: Message,
-    state: &State,
-) -> impl std::future::Future<Output = Response> {
-    let client = state.client.clone();
-    let launcher_core = state.launcher_core.clone();
-    let tx = state.tx.clone();
-    async move {
-        match message.contents {
-            Contents::Versions => {
-                let versions = launcher_core
-                    .get_version_manifest(&message.path.join("versions"))
-                    .await;
-                Response::Versions(versions)
-            }
-            Contents::Auth(string) => {
-                let result = auth_or_refresh(&client, &tx, string.as_deref(), CLIENT_ID).await;
-                Response::Auth(result)
-            }
+pub async fn worker_event_loop(message: Message, state: &State) -> Response {
+    match message.contents {
+        Contents::Versions => {
+            let versions = state
+                .launcher_core
+                .get_version_manifest(&message.path.join("versions"))
+                .await;
+            Response::Versions(versions)
+        }
+        Contents::Auth(string) => {
+            let result =
+                auth_or_refresh(&state.client, &state.tx, string.as_deref(), CLIENT_ID).await;
+            Response::Auth(result)
         }
     }
 }

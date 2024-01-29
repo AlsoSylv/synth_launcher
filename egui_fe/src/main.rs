@@ -1,3 +1,4 @@
+mod instances;
 mod worker_logic;
 mod wrappers;
 
@@ -7,18 +8,23 @@ use worker_logic::*;
 use wrappers::*;
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::SystemTime;
 
-use eframe::egui::{self, Button, Label, Sense};
+use eframe::egui::panel::TopBottomSide::Bottom;
+use eframe::egui::{self, Button, Frame, Image, Label, Margin, Sense, Stroke, Ui};
 use launcher_core::account::types::Account;
+use launcher_core::types::{Latest, Version};
 use launcher_core::{
     types::{AssetIndexJson, VersionJson, VersionManifest},
     AsyncLauncher,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+
+use instances::*;
 
 // TODO: Store encrypted auth token for reuse: Use Keyring crate
 // TODO: Document existing UI functionality: In-Progress
@@ -48,6 +54,9 @@ struct LauncherGui {
     loading_place: SystemTime,
     data_updated: bool,
     adding_account: bool,
+    adding_instance: bool,
+    temp_instance: InstanceBuilder,
+    instances: Vec<EguiInstance>,
 }
 
 #[derive(Default)]
@@ -63,7 +72,7 @@ struct PlayerData {
 #[derive(Default)]
 struct MCData {
     // Version Manifest read/write able
-    versions: Option<VersionManifest>,
+    versions: Option<VersionManifestArc>,
     // Holds the index in manifest for the current selected version
     selected_version: usize,
     // Version JSON, read only
@@ -87,16 +96,51 @@ struct MCData {
     // Total progress downloading the MC jar
     total_jar: Arc<AtomicU64>,
     finished_jar: Arc<AtomicU64>,
-    // Whether or not all assets are loaded
+    // Whether all assets are loaded
     assets: bool,
     // If the launcher is attempting to launch
     launching: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VersionManifestArc {
+    pub latest: Latest,
+    pub versions: Vec<Arc<Version>>,
+}
+
+impl From<VersionManifest> for VersionManifestArc {
+    fn from(mut value: VersionManifest) -> Self {
+        let mut arc_versions = Vec::with_capacity(value.versions.len());
+
+        for version in value.versions.drain(..) {
+            arc_versions.push(Arc::new(version))
+        }
+
+        Self {
+            latest: value.latest,
+            versions: arc_versions,
+        }
+    }
+}
+
+impl VersionManifestArc {
+    pub fn latest_release(&self) -> &Version {
+        for version in &self.versions {
+            if version.id == self.latest.release {
+                return version;
+            }
+        }
+
+        // If the latest release does not exist in the meta, things have probably gone wrong lol
+        unreachable!()
+    }
+}
+
 #[derive(Default, Deserialize, Serialize)]
 struct LauncherData {
-    jvms: Vec<Jvm>,
+    jvms: Vec<Rc<Jvm>>,
     accounts: Vec<AccRefreshPair>,
+    instances: Vec<Rc<Instance>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -105,15 +149,53 @@ struct AccRefreshPair {
     refresh_token: Arc<str>,
 }
 
-#[derive(Deserialize, Serialize)]
-struct Jvm {
-    path: String,
+struct EguiInstance {
+    i_instance: Rc<Instance>,
+    image: Option<Image<'static>>,
+}
+
+#[derive(Default)]
+struct TempInstance {
     name: String,
+    image: Option<PathBuf>,
+    jvm: Option<Rc<Jvm>>,
+    version: Option<Arc<Version>>,
+    path: String,
+    mod_loader: Option<Loader>,
+    jvm_args: String,
+    env_args: String,
+}
+
+impl From<TempInstance> for Instance {
+    fn from(value: TempInstance) -> Self {
+        Self {
+            name: value.name,
+            image: value.image,
+            jvm: value.jvm.unwrap(),
+            version: value.version.unwrap(),
+            path: PathBuf::from(value.path),
+            mod_loader: value.mod_loader,
+            jvm_args: value.jvm_args.split(' ').map(String::from).collect(),
+            env_args: value.env_args.split(' ').map(String::from).collect(),
+        }
+    }
 }
 
 impl LauncherGui {
     fn new(cc: &eframe::CreationContext) -> Box<Self> {
         let (config_dir, config) = check_file().unwrap();
+
+        let egui_instances: Vec<EguiInstance> = config
+            .instances
+            .iter()
+            .map(|instance| EguiInstance {
+                i_instance: instance.clone(),
+                image: instance
+                    .image
+                    .as_ref()
+                    .map(|image| Image::from_uri(format!("file://{}", image.to_string_lossy()))),
+            })
+            .collect();
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -125,17 +207,13 @@ impl LauncherGui {
         let launcher_core = Arc::new(AsyncLauncher::new(client.clone()));
         let (tx, rx) = async_channel::unbounded();
 
-        let rt = async_bridge::Runtime::new(
-            4,
-            State {
-                client,
-                launcher_core: launcher_core.clone(),
-                tx,
-            },
-            cc.egui_ctx.clone(),
-            worker_event_loop,
-            rt,
-        );
+        let state = &*Box::leak(Box::new(State {
+            client,
+            launcher_core: launcher_core.clone(),
+            tx,
+        }));
+
+        let rt = async_bridge::Runtime::new(4, state, cc.egui_ctx.clone(), worker_event_loop, rt);
 
         let launcher_path = Arc::new(config_dir);
 
@@ -168,6 +246,9 @@ impl LauncherGui {
             loading_place: SystemTime::now(),
             data_updated: false,
             adding_account: false,
+            adding_instance: false,
+            temp_instance: InstanceBuilder::default(),
+            instances: egui_instances,
         }
         .into()
     }
@@ -177,7 +258,7 @@ impl LauncherGui {
         if let Ok(message) = event {
             match message {
                 Response::Versions(version) => match version {
-                    Ok(versions) => self.data.versions = Some(versions),
+                    Ok(versions) => self.data.versions = Some(versions.into()),
                     Err(err) => {
                         dbg!("{}", &err);
                         self.current_error = Some(err.into())
@@ -279,7 +360,7 @@ impl LauncherGui {
         }
     }
 
-    fn prepare_launch(&self, json: &Arc<VersionJson>, manifest: &VersionManifest) {
+    fn prepare_launch(&self, json: &Arc<VersionJson>, manifest: &VersionManifestArc) {
         let libraries = json.libraries().clone().into();
         let index = json.asset_index().clone();
         let current = self.data.selected_version;
@@ -382,6 +463,50 @@ impl LauncherGui {
             ctx.request_repaint();
         });
     }
+
+    fn account_picker(&mut self, ui: &mut Ui) {
+        let frame = Frame::canvas(ui.style())
+            .inner_margin(Margin::ZERO)
+            .stroke(Stroke::NONE);
+
+        egui::TopBottomPanel::new(Bottom, "Bottom Panel")
+            .frame(frame)
+            .show_separator_line(false)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let button = Button::new("➕").small();
+
+                    if ui.add_enabled(!self.adding_account, button).clicked() {
+                        self.rt.send_with_message(Message {
+                            path: self.launcher_path.clone(),
+                            contents: Contents::Auth(None),
+                        });
+                        self.adding_account = true;
+                    }
+
+                    if let Some(acc_idx) = &mut self.player.account {
+                        let name = &self.launcher_data.accounts[*acc_idx].account.profile.name;
+
+                        egui::ComboBox::from_id_source("Account Picker")
+                            .wrap(true)
+                            .selected_text(name)
+                            .show_index(ui, acc_idx, self.launcher_data.accounts.len(), |idx| {
+                                &self.launcher_data.accounts[idx].account.profile.name
+                            });
+                    } else if self.launcher_data.accounts.is_empty() {
+                        ui.label("No Accounts");
+                    } else {
+                        self.player.account = Some(0)
+                    };
+
+                    let button = Button::new("➖").small();
+
+                    if ui.add_enabled(!self.adding_account, button).clicked() {
+                        todo!()
+                    }
+                });
+            });
+    }
 }
 
 fn send_message<R, M>(
@@ -431,11 +556,17 @@ impl eframe::App for LauncherGui {
         let width = size.width();
         let height = size.height();
 
+        ctx.style_mut(|style| {
+            style.spacing.indent = 0.0;
+        });
+
         egui::SidePanel::left("General Panel")
-            .exact_width(width * 0.1)
+            .exact_width(width * 0.15)
             .resizable(false)
             .show(ctx, |ui| {
-                if let Some(versions) = &self.data.versions {
+                if let Some(versions) = self.data.versions.take() {
+                    self.account_picker(ui);
+
                     let index = self.data.selected_version;
                     let text = if index != usize::MAX {
                         &versions.versions[index].id
@@ -443,34 +574,39 @@ impl eframe::App for LauncherGui {
                         "None"
                     };
 
-                    ui.add_space(height * 0.01);
-
-                    egui::ComboBox::from_id_source("VersionSelect")
+                    let options = egui::ComboBox::from_id_source("VersionSelect")
                         .selected_text(text)
-                        .show_ui(ui, |ui| {
-                            let iter = versions.versions.iter().enumerate();
-                            iter.for_each(|(index, version)| {
-                                let selected = &mut self.data.selected_version;
+                        .show_index(
+                            ui,
+                            &mut self.data.selected_version,
+                            versions.versions.len(),
+                            |idx| {
+                                if idx != usize::MAX {
+                                    &versions.versions[idx].id
+                                } else {
+                                    "None"
+                                }
+                            },
+                        );
 
-                                if ui.selectable_value(selected, index, &version.id).clicked() {
-                                    let launcher = self.launcher.clone();
-                                    let version = version.clone();
-                                    let path = self.launcher_path.clone();
+                    if options.changed() {
+                        let version = &versions.versions[index];
+                        let launcher = self.launcher.clone();
+                        let version = version.clone();
+                        let path = self.launcher_path.clone();
 
-                                    if let Some(json) = &self.data.version_json {
-                                        if version.id != json.id() {
-                                            self.data.version_json = None;
-                                            self.data.class_path = None;
-                                            self.data.jar_path = None;
-                                            self.data.assets = false;
-                                            self.rt.future(get_version(launcher, version, path));
-                                        }
-                                    } else {
-                                        self.rt.future(get_version(launcher, version, path));
-                                    }
-                                };
-                            })
-                        });
+                        if let Some(json) = &self.data.version_json {
+                            if version.id != json.id() {
+                                self.data.version_json = None;
+                                self.data.class_path = None;
+                                self.data.jar_path = None;
+                                self.data.assets = false;
+                                self.rt.future(get_version(launcher, version, path));
+                            }
+                        } else {
+                            self.rt.future(get_version(launcher, version, path));
+                        }
+                    }
 
                     let selected_text = if let Some(jvm_index) = self.jvm_index {
                         &self.launcher_data.jvms[jvm_index].name
@@ -484,7 +620,8 @@ impl eframe::App for LauncherGui {
                         .show_ui(ui, |ui| {
                             if ui.button("Default").clicked() {
                                 self.jvm_index = None;
-                                self.rt.future(get_default_version_response());
+                                let (_vendor, version) = get_vendor_major_version("java");
+                                self.java_version = version;
                             }
 
                             for (index, jvm) in self.launcher_data.jvms.iter().enumerate() {
@@ -506,39 +643,12 @@ impl eframe::App for LauncherGui {
                         if let Some(path) = rfd::FileDialog::new().pick_file() {
                             let path = path.display().to_string();
                             let (vendor, version) = get_vendor_major_version(&path);
-                            self.launcher_data.jvms.push(Jvm {
+                            self.launcher_data.jvms.push(Rc::new(Jvm {
                                 path,
                                 name: format!("{vendor} {version}"),
-                            });
+                            }));
                             self.data_updated = true;
                         }
-                    }
-
-                    if let Some(acc_idx) = &mut self.player.account {
-                        let name = &self.launcher_data.accounts[*acc_idx].account.profile.name;
-
-                        egui::ComboBox::from_id_source("Account Picker")
-                            .wrap(true)
-                            .selected_text(name)
-                            .show_ui(ui, |ui| {
-                                for (idx, acc) in self.launcher_data.accounts.iter().enumerate() {
-                                    ui.selectable_value(acc_idx, idx, &acc.account.profile.name);
-                                }
-                            });
-                    } else if self.launcher_data.accounts.is_empty() {
-                        ui.label("No Accounts");
-                    } else {
-                        self.player.account = Some(0)
-                    };
-
-                    let button = Button::new("Add Account");
-
-                    if ui.add_enabled(!self.adding_account, button).clicked() {
-                        self.rt.send_with_message(Message {
-                            path: self.launcher_path.clone(),
-                            contents: Contents::Auth(None),
-                        });
-                        self.adding_account = true;
                     }
 
                     let button = Button::new("Play");
@@ -548,12 +658,21 @@ impl eframe::App for LauncherGui {
                         let enabled = ui.add_enabled(enabled, button);
 
                         if enabled.clicked() {
-                            self.prepare_launch(version_json, versions);
+                            self.prepare_launch(version_json, &versions);
                             self.data.launching = true;
                         }
                     } else {
                         ui.add_enabled(false, button);
                     }
+
+                    let button = Button::new("Add Instance");
+
+                    if ui.add_enabled(!self.adding_instance, button).clicked() {
+                        self.adding_instance = true;
+                        self.temp_instance = Default::default();
+                    }
+
+                    self.data.versions = Some(versions);
                 } else {
                     let mut loading = "Loading".to_string();
                     let elapsed = self.loading_place.elapsed().unwrap();
@@ -569,8 +688,128 @@ impl eframe::App for LauncherGui {
                 }
             });
 
+        if self.adding_instance {
+            egui::Window::new("Adding Instance").show(ctx, |ui| {
+                let tmp = &mut self.temp_instance;
+
+                ui.horizontal(|ui| {
+                    ui.label("Name: ");
+                    ui.text_edit_singleline(tmp.name_mut());
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("JVM: ");
+
+                    let selected_text = tmp.jvm().name.as_str();
+
+                    egui::ComboBox::from_id_source("Java Selector")
+                        .wrap(true)
+                        .selected_text(selected_text)
+                        .show_ui(ui, |ui| {
+                            if ui.button("Default").clicked() {
+                                tmp.jvm = Default::default();
+                            }
+
+                            for jvm in &self.launcher_data.jvms {
+                                if ui.button(jvm.name.as_str()).clicked() {
+                                    tmp.jvm = jvm.clone();
+                                }
+                            }
+                        });
+                });
+
+                ui.horizontal(|ui| {
+                    let label = Label::new("Select Icon Path").sense(Sense::click());
+                    if ui.add(label).clicked() {
+                        if let Some(path) = rfd::FileDialog::new().pick_file() {
+                            tmp.image = Some(path.to_string_lossy().to_string());
+                        }
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    if let Some(versions) = &self.data.versions {
+                        let selected_text = if let Some(v) = tmp.version() {
+                            v.id.as_str()
+                        } else {
+                            "None"
+                        };
+
+                        egui::ComboBox::from_id_source("VersionSelect")
+                            .selected_text(selected_text)
+                            .show_ui(ui, |ui| {
+                                let iter = versions.versions.iter();
+                                iter.for_each(|version| {
+                                    if ui.button(&version.id).clicked() {
+                                        tmp.version = Some(version.clone());
+                                    };
+                                })
+                            });
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    if ui.button("Select Path").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                            tmp.path = path.to_string_lossy().to_string();
+                        }
+                    }
+
+                    ui.text_edit_singleline(tmp.path_mut());
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Jvm Args: ");
+                    ui.text_edit_singleline(tmp.jvm_args_mut());
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Env Args: ");
+                    ui.text_edit_singleline(tmp.env_args_mut());
+                });
+
+                ui.horizontal(|ui| {
+                    ui.radio_value(tmp.mod_loader_mut(), None, "Vanilla");
+                    ui.radio_value(tmp.mod_loader_mut(), Some(Loader::Fabric), "Fabric");
+                });
+
+                if ui.button("Add").clicked() {
+                    let tmp = std::mem::take(tmp);
+                    let instance: Rc<Instance> = Rc::new(tmp.build());
+
+                    self.launcher_data.instances.push(instance.clone());
+
+                    let image = instance.image.as_ref().map(|image_path| {
+                        Image::from_uri(format!("file://{}", image_path.to_string_lossy()))
+                    });
+
+                    let egui_i = EguiInstance {
+                        i_instance: instance.clone(),
+                        image,
+                    };
+
+                    self.instances.push(egui_i);
+                    self.adding_instance = false;
+                    self.data_updated = true;
+                }
+            });
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Why does this panel get created?
+            for instances in self.instances.iter() {
+                egui::Grid::new("instance grid")
+                    .min_col_width(ui.available_width())
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            if let Some(image) = &instances.image {
+                                ui.add(image.clone());
+                            }
+                            ui.label(&instances.i_instance.name);
+                            ui.label(&instances.i_instance.version.id);
+                            ui.label(&instances.i_instance.jvm.name);
+                        });
+                    });
+            }
         });
 
         self.data.launching = self.maybe_launch();

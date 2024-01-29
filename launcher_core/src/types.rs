@@ -1,11 +1,22 @@
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VersionManifest {
     pub latest: Latest,
-    pub versions: Vec<Arc<Version>>,
+    pub versions: Vec<Version>,
+}
+
+impl VersionManifest {
+    pub fn latest_release(&self) -> &Version {
+        for version in &self.versions {
+            if version.id == self.latest.release {
+                return version;
+            }
+        }
+
+        // If the latest release does not exist in the meta, things have probably gone wrong lol
+        unreachable!()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
