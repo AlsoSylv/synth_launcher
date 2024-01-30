@@ -230,7 +230,7 @@ impl AsyncLauncher {
                     tokio::fs::create_dir_all(dir_path).await?;
                 }
 
-                let url = format!("{}/{}/{}/", ASSET_BASE_URL, first_two, &asset.hash);
+                let url = format!("{}/{}/{}", ASSET_BASE_URL, first_two, &asset.hash);
 
                 let response = self.client.get(url).send().await?;
                 let bytes = response.bytes().await?;
@@ -484,29 +484,17 @@ pub fn launch_game(
     let mut process = std::process::Command::new(java_path);
     let natives_dir = directory.join("natives");
 
-    if let Some(args) = &json.arguments {
-        args.jvm.iter().for_each(|arg| match arg {
-            types::JvmElement::JvmClass(class) => {
-                class.rules.iter().for_each(|rule| {
-                    if let Some(os) = &rule.os.name {
-                        if rule.action == types::Action::Allow && os == OS {
-                            match &class.value {
-                                types::Value::String(arg) => {
-                                    process.arg(arg);
-                                }
-                                types::Value::StringArray(args) => {
-                                    for arg in args {
-                                        process.arg(arg);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
+    if let Some(args) = &json.arguments.jvm {
+        args.iter().for_each(|arg| {
+            if let Some(rules) = &arg.rules {
+                if !rules.iter().all(types::JvmRule::applies) {
+                    return;
+                }
             }
-            types::JvmElement::String(arg) => {
+
+            arg.value.iter().for_each(|s| {
                 let arg = apply_jvm_args(
-                    arg,
+                    s,
                     &natives_dir,
                     launcher_name,
                     launcher_version,
@@ -514,27 +502,10 @@ pub fn launch_game(
                 );
 
                 process.arg(arg);
-            }
+            });
         });
-
-        process.arg(json.main_class());
-
-        for arg in &args.game {
-            match &arg {
-                types::GameElement::GameClass(_) => {
-                    // This is left empty, as I have not setup support for any of the features here
-                }
-                types::GameElement::String(arg) => {
-                    let arg = apply_mc_args(
-                        arg, json, directory, asset_root, account, client_id, auth_xuid,
-                    );
-
-                    process.arg(arg);
-                }
-            }
-        }
     } else {
-        let jvm_args = [
+        [
             "-Djava.library.path=${natives_directory}",
             "-Djna.tmpdir=${natives_directory}",
             "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}",
@@ -543,11 +514,11 @@ pub fn launch_game(
             "-Dminecraft.launcher.version=${launcher_version}",
             "-cp",
             "${classpath}",
-        ];
-
-        for arg in jvm_args {
+        ]
+        .iter()
+        .for_each(|s| {
             let arg = apply_jvm_args(
-                arg,
+                *s,
                 &natives_dir,
                 launcher_name,
                 launcher_version,
@@ -555,20 +526,26 @@ pub fn launch_game(
             );
 
             process.arg(arg);
-        }
+        })
+    }
+    process.arg(json.main_class());
 
-        process.arg(json.main_class());
-
-        if let Some(args) = &json.minecraft_arguments {
-            let args: Vec<&str> = args.split(' ').collect();
-            for arg in args {
+    for arg in &json.arguments.game {
+        match &arg {
+            types::GameElement::GameClass(_) => {
+                // This is left empty, as I have not setup support for any of the features here
+            }
+            types::GameElement::String(arg) => {
                 let arg = apply_mc_args(
                     arg, json, directory, asset_root, account, client_id, auth_xuid,
                 );
+
                 process.arg(arg);
             }
         }
     }
+
+    println!("{}", &asset_root.to_string_lossy());
 
     process.spawn().unwrap();
 }
@@ -601,8 +578,8 @@ fn apply_mc_args(
         .replace("${auth_player_name}", &account.profile.name)
         .replace("${version_name}", json.id())
         .replace("${game_directory}", &directory.to_string_lossy())
-        .replace("${assets_root}", &asset_root.to_string_lossy())
-        .replace("${game_assets}", &asset_root.to_string_lossy())
+        .replace("${assets_root}", &asset_root.to_str().unwrap())
+        .replace("${game_assets}", &asset_root.to_str().unwrap())
         .replace("${assets_index_name}", &json.asset_index().id)
         .replace("${auth_uuid}", &account.profile.id)
         .replace("${auth_access_token}", &account.access_token)

@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VersionManifest {
@@ -49,16 +49,16 @@ pub enum Type {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct VersionJson {
-    pub arguments: Option<Arguments>,
+    #[serde(alias = "minecraftArguments")]
+    pub arguments: Arguments,
     pub asset_index: AssetIndex,
     pub assets: String,
     pub compliance_level: Option<i64>,
-    pub downloads: WelcomeDownloads,
+    pub downloads: Box<WelcomeDownloads>,
     pub id: String,
     pub java_version: Option<JavaVersion>,
     pub logging: Option<Logging>,
     pub main_class: String,
-    pub minecraft_arguments: Option<String>,
     pub minimum_launcher_version: i64,
     pub release_time: String,
     pub time: String,
@@ -220,7 +220,9 @@ pub struct Artifact {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssetIndexJson {
-    pub map_to_resources: Option<bool>,
+    #[serde(skip)]
+    #[allow(unused)]
+    map_to_resources: Option<bool>,
     pub objects: std::collections::HashMap<String, Object>,
 }
 
@@ -231,11 +233,43 @@ pub struct Object {
     pub size: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Arguments {
     pub game: Vec<GameElement>,
-    pub jvm: Vec<JvmElement>,
+    pub jvm: Option<Vec<JvmClass>>,
+}
+
+impl<'de> Deserialize<'de> for Arguments {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct TempArguments {
+            pub game: Vec<GameElement>,
+            pub jvm: Option<Vec<JvmClass>>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum TempArgs {
+            Args(TempArguments),
+            String(String),
+        }
+
+        let v = TempArgs::deserialize(deserializer)?;
+
+        let r = match v {
+            TempArgs::Args(t) => Arguments { jvm: t.jvm, game: t.game },
+            TempArgs::String(s) => {
+                Arguments {
+                    jvm: None,
+                    game: s.split(' ').map(|s| {GameElement::String(s.to_owned())}).collect()
+                }
+            }
+        };
+
+        Ok(r)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -249,16 +283,9 @@ pub enum GameElement {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GameClass {
-    pub rules: Vec<GameRule>,
-    pub value: Value,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-#[serde(deny_unknown_fields)]
-pub enum Value {
-    String(String),
-    StringArray(Vec<String>),
+    pub rules: Option<Vec<GameRule>>,
+    #[serde(deserialize_with = "string_or_seq_string")]
+    pub value: Box<[String]>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -279,19 +306,38 @@ pub struct Features {
     pub is_quick_play_realms: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-#[serde(deny_unknown_fields)]
-pub enum JvmElement {
-    JvmClass(JvmClass),
-    String(String),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct JvmClass {
-    pub rules: Vec<JvmRule>,
-    pub value: Value,
+    pub rules: Option<Vec<JvmRule>>,
+    pub value: Box<[String]>,
+}
+
+impl<'de> serde::de::Deserialize<'de> for JvmClass {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        #[derive(Deserialize)]
+        struct Temp {
+            pub rules: Option<Vec<JvmRule>>,
+            #[serde(deserialize_with = "string_or_seq_string")]
+            pub value: Box<[String]>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum TempClass {
+            Class(Temp),
+            String(String),
+        }
+
+        let v = TempClass::deserialize(deserializer)?;
+
+        Ok(
+            match v {
+                TempClass::Class(c) => JvmClass { value: c.value, rules: c.rules },
+                TempClass::String(s) => JvmClass { value: Box::new([s]), rules: None }
+            }
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -299,6 +345,16 @@ pub struct JvmClass {
 pub struct JvmRule {
     pub action: Action,
     pub os: PurpleOs,
+}
+
+impl JvmRule {
+    pub fn applies(&self) -> bool {
+        if let Some(os) = &self.os.name {
+            os == OS && self.action == Action::Allow
+        } else {
+            self.action == Action::Allow
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -352,3 +408,31 @@ pub struct LoggingClient {
 }
 
 use crate::OS;
+
+fn string_or_seq_string<'de, D>(deserializer: D) -> Result<Box<[String]>, D::Error>
+    where D: serde::Deserializer<'de>
+{
+    struct StringOrBoxArray(std::marker::PhantomData<Box<[String]>>);
+
+    impl<'de> serde::de::Visitor<'de> for StringOrBoxArray {
+        type Value = Box<[String]>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("string or list of strings")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where E: serde::de::Error
+        {
+            Ok(Box::new([value.to_owned()]))
+        }
+
+        fn visit_seq<S>(self, visitor: S) -> Result<Self::Value, S::Error>
+            where S: serde::de::SeqAccess<'de>
+        {
+            Deserialize::deserialize(serde::de::value::SeqAccessDeserializer::new(visitor))
+        }
+    }
+
+    deserializer.deserialize_any(StringOrBoxArray(std::marker::PhantomData))
+}

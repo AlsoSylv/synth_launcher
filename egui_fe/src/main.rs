@@ -567,30 +567,25 @@ impl eframe::App for LauncherGui {
                 if let Some(versions) = self.data.versions.take() {
                     self.account_picker(ui);
 
-                    let index = self.data.selected_version;
-                    let text = if index != usize::MAX {
-                        &versions.versions[index].id
+                    let index = &mut self.data.selected_version;
+                    let text = if *index != usize::MAX {
+                        &versions.versions[*index].id
                     } else {
                         "None"
                     };
 
                     let options = egui::ComboBox::from_id_source("VersionSelect")
                         .selected_text(text)
-                        .show_index(
-                            ui,
-                            &mut self.data.selected_version,
-                            versions.versions.len(),
-                            |idx| {
-                                if idx != usize::MAX {
-                                    &versions.versions[idx].id
-                                } else {
-                                    "None"
-                                }
-                            },
-                        );
+                        .show_index(ui, index, versions.versions.len(), |idx| {
+                            if idx != usize::MAX {
+                                &versions.versions[idx].id
+                            } else {
+                                "None"
+                            }
+                        });
 
                     if options.changed() {
-                        let version = &versions.versions[index];
+                        let version = &versions.versions[*index];
                         let launcher = self.launcher.clone();
                         let version = version.clone();
                         let path = self.launcher_path.clone();
