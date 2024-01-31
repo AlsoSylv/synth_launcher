@@ -108,19 +108,14 @@ impl AsyncLauncher {
             let mut updated: types::VersionManifest = response.json().await?;
 
             if meta.latest != updated.latest {
-                let meta_data = tokio::fs::metadata(&file).await?;
                 updated
                     .versions
                     .drain(..)
                     .filter(|v| {
-                        let format = time::macros::format_description!(
-                            "[year]-[month]-[day]T[hour]-[minute]-[second]+00:00"
-                        );
-                        let parsed = time::OffsetDateTime::parse(&v.release_time, format).unwrap();
-                        let modified = time::OffsetDateTime::from(meta_data.modified().unwrap());
-
-                        parsed > modified
+                        !meta.versions.contains(v)
                     })
+                    .collect::<Vec<types::Version>>()
+                    .drain(..)
                     .enumerate()
                     .for_each(|(idx, version)| meta.versions.insert(idx, version));
             }
@@ -151,6 +146,8 @@ impl AsyncLauncher {
     ) -> Result<types::VersionJson, Error> {
         let directory = directory.join(&version_details.id);
         let file = directory.join(format!("{}.json", version_details.id));
+        #[cfg(debug_assertions)]
+        let trans = directory.join(format!("trans_{}.json", version_details.id));
 
         if tokio::fs::try_exists(&file).await? {
             let buf = tokio::fs::read(file).await?;
@@ -164,8 +161,11 @@ impl AsyncLauncher {
             tokio::fs::create_dir_all(&directory).await?;
         }
         tokio::fs::write(file, &buf).await?;
-
         let val = serde_json::from_slice(&buf)?;
+
+        #[cfg(debug_assertions)]
+        tokio::fs::write(trans, &serde_json::to_vec_pretty(&val)?).await?;
+
         Ok(val)
     }
 
@@ -268,12 +268,14 @@ impl AsyncLauncher {
 
         stream::iter(libraries.iter().filter_map(|library| {
             let dir = directory.to_str().unwrap();
-            if let Some(rules) = &library.rules {
-                let mut rule_iter = rules.iter();
+            let mut native = library.natives.is_some();
 
-                if !rule_iter.any(|rule| rule.applies()) {
+            if let Some(rule) = &library.rules {
+                if !rule.applies() {
                     return None;
                 }
+
+                native |= rule.native();
             }
 
             if let Some(natives) = &library.natives {
@@ -285,44 +287,7 @@ impl AsyncLauncher {
             // Move to after rule validation to reduce
             path.reserve_exact(library.name.len() + dir.len() + 2);
 
-            let artifact = if let Some(classifier) = &library.downloads.classifiers {
-                #[cfg(target_os = "windows")]
-                if let Some(c) = &classifier.natives_windows {
-                    c
-                } else if cfg!(target_arch = "x84_64") {
-                    if let Some(c) = &classifier.natives_windows_64 {
-                        c
-                    } else {
-                        return None;
-                    }
-                } else {
-                    return None;
-                }
-
-                #[cfg(target_os = "macos")]
-                if let Some(c) = &classifier.natives_osx {
-                    c
-                } else {
-                    classifier.natives_macos.as_ref().unwrap()
-                };
-
-                #[cfg(target_os = "linux")]
-                if let Some(c) = &classifier.natives_linux {
-                    c
-                } else if cfg!(target_arch = "x84_64") {
-                    if let Some(c) = &classifier.linux_x86_64 {
-                        c
-                    } else {
-                        return None;
-                    }
-                } else {
-                    return None;
-                }
-            } else if let Some(art) = &library.downloads.artifact {
-                art
-            } else {
-                unreachable!("Found missing artifact")
-            };
+            let artifact = library.downloads.as_ref()?;
 
             #[cfg(not(windows))]
             path.extend([dir, "/", &artifact.path, ":"]);
@@ -332,21 +297,10 @@ impl AsyncLauncher {
 
             total.fetch_add(artifact.size, std::sync::atomic::Ordering::Relaxed);
 
-            Some(Ok::<_, Error>((artifact, library)))
+            Some(Ok::<_, Error>((artifact, native)))
         }))
-        .try_for_each_concurrent(16, |(artifact, library)| async {
+        .try_for_each_concurrent(16, |(artifact, native)| async move {
             let path = directory.join(Path::new(&artifact.path));
-            let mut native = library.natives.is_some() || library.extract.is_some();
-
-            if let Some(rules) = &library.rules {
-                let mut rule_iter = rules.iter();
-
-                if !rule_iter.any(|rule| rule.applies()) {
-                    return Ok(());
-                }
-
-                native |= rule_iter.all(|rule| rule.native());
-            }
             let parent = path.parent().unwrap();
 
             if tokio::fs::try_exists(&path).await? {
@@ -399,7 +353,7 @@ impl AsyncLauncher {
             version_details.downloads.client.size,
             std::sync::atomic::Ordering::Relaxed,
         );
-        finished_bytes.fetch_add(0, std::sync::atomic::Ordering::Relaxed);
+        finished_bytes.store(0, std::sync::atomic::Ordering::Relaxed);
 
         let id = version_details.id();
         let url = version_details.url();
@@ -444,7 +398,7 @@ async fn extract_native(native_dir: &Path, buf: Vec<u8>) -> Result<(), Error> {
         use tokio_util::compat::FuturesAsyncReadCompatExt;
 
         let mut entry_reader = reader.reader_with_entry(index).await.unwrap().compat();
-        let entry = reader.file().entries().get(index).unwrap().entry();
+        let entry = reader.file().entries().get(index).unwrap();
         if entry.dir().unwrap() {
             continue;
         } else {
@@ -651,13 +605,13 @@ mod tests {
                 .get_version_json(version, Path::new("./Versions"))
                 .await
             {
-                Ok(version) => version.libraries().clone(),
+                Ok(version) => version,
                 Err(err) => panic!("How {err:?}"),
             };
             // println!("{:?}", version.id);
             if let Err(e) = launcher
                 .download_libraries_and_get_path(
-                    &libs,
+                    libs.libraries(),
                     Path::new("./Libs"),
                     Path::new("./natives"),
                     &AtomicU64::new(0),

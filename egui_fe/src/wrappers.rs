@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 pub async fn get_asset_index(
     launcher_core: Arc<AsyncLauncher>,
-    asset_index: AssetIndex,
+    asset_index: Arc<AssetIndex>,
     tag: Arc<Version>,
     path: Arc<PathBuf>,
 ) -> Response {

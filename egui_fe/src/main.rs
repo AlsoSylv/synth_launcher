@@ -361,7 +361,7 @@ impl LauncherGui {
     }
 
     fn prepare_launch(&self, json: &Arc<VersionJson>, manifest: &VersionManifestArc) {
-        let libraries = json.libraries().clone().into();
+        let libraries = json.libraries().clone();
         let index = json.asset_index().clone();
         let current = self.data.selected_version;
         let tag = manifest.versions[current].clone();
