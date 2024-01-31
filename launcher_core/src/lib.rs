@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicU64;
 use crate::account::types::Account;
 use futures::{stream, StreamExt, TryStreamExt};
 use tokio::io::AsyncWriteExt;
+use crate::types::Value;
 
 #[cfg(windows)]
 const OS: &str = "windows";
@@ -104,14 +105,24 @@ impl AsyncLauncher {
             let buf = tokio::fs::read(&file).await?;
             let mut meta: types::VersionManifest = serde_json::from_slice(&buf)?;
 
-            let updated: types::VersionManifest = response.json().await?;
+            let mut updated: types::VersionManifest = response.json().await?;
 
             if meta.latest != updated.latest {
-                for versions in updated.versions {
-                    if !meta.versions.contains(&versions) {
-                        meta.versions.push(versions);
-                    }
-                }
+                let meta_data = tokio::fs::metadata(&file).await?;
+                updated
+                    .versions
+                    .drain(..)
+                    .filter(|v| {
+                        let format = time::macros::format_description!(
+                            "[year]-[month]-[day]T[hour]-[minute]-[second]+00:00"
+                        );
+                        let parsed = time::OffsetDateTime::parse(&v.release_time, format).unwrap();
+                        let modified = time::OffsetDateTime::from(meta_data.modified().unwrap());
+
+                        parsed > modified
+                    })
+                    .enumerate()
+                    .for_each(|(idx, version)| meta.versions.insert(idx, version));
             }
 
             let slice = serde_json::to_vec(&meta)?;
@@ -484,50 +495,28 @@ pub fn launch_game(
     let mut process = std::process::Command::new(java_path);
     let natives_dir = directory.join("natives");
 
-    if let Some(args) = &json.arguments.jvm {
-        args.iter().for_each(|arg| {
-            if let Some(rules) = &arg.rules {
-                if !rules.iter().all(types::JvmRule::applies) {
-                    return;
-                }
+    json.arguments.jvm.iter().for_each(|arg| {
+        if let Some(rules) = &arg.rules {
+            if !rules.iter().all(types::JvmRule::applies) {
+                return;
             }
+        }
 
-            arg.value.iter().for_each(|s| {
-                let arg = apply_jvm_args(
-                    s,
-                    &natives_dir,
-                    launcher_name,
-                    launcher_version,
-                    class_path,
-                );
-
+        match &arg.value {
+            Value::Array(arr) => {
+                arr.iter().for_each(|s| {
+                    let arg = apply_jvm_args(s, &natives_dir, launcher_name, launcher_version, class_path);
+                    process.arg(arg);
+                });
+            }
+            Value::String(s) => {
+                let arg = apply_jvm_args(s, &natives_dir, launcher_name, launcher_version, class_path);
                 process.arg(arg);
-            });
-        });
-    } else {
-        [
-            "-Djava.library.path=${natives_directory}",
-            "-Djna.tmpdir=${natives_directory}",
-            "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}",
-            "-Dio.netty.native.workdir=${natives_directory}",
-            "-Dminecraft.launcher.brand=${launcher_name}",
-            "-Dminecraft.launcher.version=${launcher_version}",
-            "-cp",
-            "${classpath}",
-        ]
-        .iter()
-        .for_each(|s| {
-            let arg = apply_jvm_args(
-                *s,
-                &natives_dir,
-                launcher_name,
-                launcher_version,
-                class_path,
-            );
 
-            process.arg(arg);
-        })
-    }
+            }
+        }
+    });
+
     process.arg(json.main_class());
 
     for arg in &json.arguments.game {
@@ -544,8 +533,6 @@ pub fn launch_game(
             }
         }
     }
-
-    println!("{}", &asset_root.to_string_lossy());
 
     process.spawn().unwrap();
 }
@@ -578,8 +565,8 @@ fn apply_mc_args(
         .replace("${auth_player_name}", &account.profile.name)
         .replace("${version_name}", json.id())
         .replace("${game_directory}", &directory.to_string_lossy())
-        .replace("${assets_root}", &asset_root.to_str().unwrap())
-        .replace("${game_assets}", &asset_root.to_str().unwrap())
+        .replace("${assets_root}", &asset_root.to_string_lossy())
+        .replace("${game_assets}", &asset_root.to_string_lossy())
         .replace("${assets_index_name}", &json.asset_index().id)
         .replace("${auth_uuid}", &account.profile.id)
         .replace("${auth_access_token}", &account.access_token)

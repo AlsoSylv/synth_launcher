@@ -54,7 +54,7 @@ pub struct VersionJson {
     pub asset_index: AssetIndex,
     pub assets: String,
     pub compliance_level: Option<i64>,
-    pub downloads: Box<WelcomeDownloads>,
+    pub downloads: WelcomeDownloads,
     pub id: String,
     pub java_version: Option<JavaVersion>,
     pub logging: Option<Logging>,
@@ -237,40 +237,49 @@ pub struct Object {
 #[serde(deny_unknown_fields)]
 pub struct Arguments {
     pub game: Vec<GameElement>,
-    pub jvm: Option<Vec<JvmClass>>,
+    pub jvm: Vec<JvmClass>,
 }
 
-impl<'de> Deserialize<'de> for Arguments {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct TempArguments {
-            pub game: Vec<GameElement>,
-            pub jvm: Option<Vec<JvmClass>>,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum TempArgs {
-            Args(TempArguments),
-            String(String),
-        }
-
-        let v = TempArgs::deserialize(deserializer)?;
-
-        let r = match v {
-            TempArgs::Args(t) => Arguments { jvm: t.jvm, game: t.game },
-            TempArgs::String(s) => {
-                Arguments {
-                    jvm: None,
-                    game: s.split(' ').map(|s| {GameElement::String(s.to_owned())}).collect()
-                }
+    impl<'de> Deserialize<'de> for Arguments {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct TempArguments {
+                pub game: Vec<GameElement>,
+                pub jvm: Vec<JvmClass>,
             }
-        };
 
-        Ok(r)
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum TempArgs {
+                Args(TempArguments),
+                String(String),
+            }
+
+            let v = TempArgs::deserialize(deserializer)?;
+
+            let r = match v {
+                TempArgs::Args(t) => Arguments { jvm: t.jvm, game: t.game },
+                TempArgs::String(s) => {
+                    Arguments {
+                        jvm: vec![
+                            "-Djava.library.path=${natives_directory}",
+                            "-Djna.tmpdir=${natives_directory}",
+                            "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}",
+                            "-Dio.netty.native.workdir=${natives_directory}",
+                            "-Dminecraft.launcher.brand=${launcher_name}",
+                            "-Dminecraft.launcher.version=${launcher_version}",
+                            "-cp",
+                            "${classpath}",
+                        ].into_iter().map(|s| JvmClass { rules: None, value: Value::String(s.to_owned()) }).collect(),
+                        game: s.split(' ').map(|s| {GameElement::String(s.to_owned())}).collect()
+                    }
+                }
+            };
+
+            Ok(r)
+        }
     }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -310,7 +319,14 @@ pub struct Features {
 #[serde(deny_unknown_fields)]
 pub struct JvmClass {
     pub rules: Option<Vec<JvmRule>>,
-    pub value: Box<[String]>,
+    pub value: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Value {
+    Array(Box<[String]>),
+    String(String)
 }
 
 impl<'de> serde::de::Deserialize<'de> for JvmClass {
@@ -318,8 +334,7 @@ impl<'de> serde::de::Deserialize<'de> for JvmClass {
         #[derive(Deserialize)]
         struct Temp {
             pub rules: Option<Vec<JvmRule>>,
-            #[serde(deserialize_with = "string_or_seq_string")]
-            pub value: Box<[String]>,
+            pub value: Value,
         }
 
         #[derive(Deserialize)]
@@ -334,7 +349,7 @@ impl<'de> serde::de::Deserialize<'de> for JvmClass {
         Ok(
             match v {
                 TempClass::Class(c) => JvmClass { value: c.value, rules: c.rules },
-                TempClass::String(s) => JvmClass { value: Box::new([s]), rules: None }
+                TempClass::String(s) => JvmClass { value: Value::String(s), rules: None }
             }
         )
     }
@@ -410,7 +425,7 @@ pub struct LoggingClient {
 use crate::OS;
 
 fn string_or_seq_string<'de, D>(deserializer: D) -> Result<Box<[String]>, D::Error>
-    where D: serde::Deserializer<'de>
+    where D: Deserializer<'de>
 {
     struct StringOrBoxArray(std::marker::PhantomData<Box<[String]>>);
 

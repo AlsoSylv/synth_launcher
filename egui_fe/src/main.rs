@@ -573,18 +573,20 @@ impl eframe::App for LauncherGui {
                     } else {
                         "None"
                     };
+                    let mut changed = false;
 
-                    let options = egui::ComboBox::from_id_source("VersionSelect")
+                    egui::ComboBox::from_id_source("VersionSelect")
                         .selected_text(text)
-                        .show_index(ui, index, versions.versions.len(), |idx| {
-                            if idx != usize::MAX {
-                                &versions.versions[idx].id
-                            } else {
-                                "None"
-                            }
+                        .show_ui(ui, |ui| {
+
+                            versions.versions.iter().enumerate().for_each(|(idx, val)| {
+                                if ui.selectable_value(index, idx, &val.id).clicked() {
+                                    changed = true;
+                                }
+                            });
                         });
 
-                    if options.changed() {
+                    if changed {
                         let version = &versions.versions[*index];
                         let launcher = self.launcher.clone();
                         let version = version.clone();
