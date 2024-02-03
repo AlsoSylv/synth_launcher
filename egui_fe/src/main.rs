@@ -16,7 +16,7 @@ use std::time::SystemTime;
 use eframe::egui::panel::TopBottomSide::Bottom;
 use eframe::egui::{self, Button, Frame, Image, Label, Margin, Sense, Stroke, Ui};
 use launcher_core::account::types::Account;
-use launcher_core::types::{Latest, Version};
+use launcher_core::types::{Latest, Type, Version};
 use launcher_core::{
     types::{AssetIndexJson, VersionJson, VersionManifest},
     AsyncLauncher,
@@ -579,7 +579,7 @@ impl eframe::App for LauncherGui {
                         .selected_text(text)
                         .show_ui(ui, |ui| {
 
-                            versions.versions.iter().enumerate().for_each(|(idx, val)| {
+                            versions.versions.iter().enumerate().filter(|(_, v)| v.version_type == Type::Release).for_each(|(idx, val)| {
                                 if ui.selectable_value(index, idx, &val.id).clicked() {
                                     changed = true;
                                 }
@@ -588,6 +588,7 @@ impl eframe::App for LauncherGui {
 
                     if changed {
                         let version = &versions.versions[*index];
+                        println!("{}", version.id);
                         let launcher = self.launcher.clone();
                         let version = version.clone();
                         let path = self.launcher_path.clone();

@@ -139,6 +139,25 @@ impl<'de> Deserialize<'de> for Library {
             pub natives: Option<Natives>,
         }
 
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        pub struct LibraryDownloads {
+            pub artifact: Option<Artifact>,
+            pub classifiers: Option<Classifiers>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        pub struct Classifiers {
+            #[cfg_attr(target_arch = "x86_64", serde(alias = "linux-x86_64"))]
+            pub natives_linux: Option<Artifact>,
+            #[serde(alias = "natives_osx")]
+            pub natives_macos: Option<Artifact>,
+            #[cfg_attr(target_arch = "x86_64", serde(alias = "natives-windows-64"))]
+            #[cfg_attr(target_arch = "x86", serde(alias = "natives-windows-32"))]
+            pub natives_windows: Option<Artifact>,
+        }
+
         let mut t = TempLibrary::deserialize(deserializer)?;
 
         let rules = if let Some(mut rules) = t.rules.take() {
@@ -161,43 +180,21 @@ impl<'de> Deserialize<'de> for Library {
 
         let artifact = if let Some(mut classifier) = t.downloads.classifiers.take() {
             #[cfg(target_os = "windows")]
-            if let Some(c) = &classifier.natives_windows {
-                c
-            } else if cfg!(target_arch = "x84_64") {
-                if let Some(c) = &classifier.natives_windows_64 {
-                    c
-                } else {
-                    return None;
-                }
-            } else {
-                return None;
+            {
+                classifier.natives_windows.take()
             }
 
             #[cfg(target_os = "macos")]
-            if let Some(c) = &classifier.natives_osx {
-                c
-            } else {
-                classifier.natives_macos.as_ref().unwrap()
-            };
+            {
+                classifier.natives_macos.take()
+            }
 
             #[cfg(target_os = "linux")]
-            if cfg!(target_arch = "x84_64") {
-                if let Some(c) = classifier.linux_x86_64.take() {
-                    Some(c)
-                } else if let Some(c) = classifier.natives_linux.take() {
-                    Some(c)
-                } else {
-                    None
-                }
-            } else if let Some(c) = classifier.natives_linux.take() {
-                Some(c)
-            } else {
-                None
+            {
+                classifier.natives_linux.take()
             }
-        } else if let Some(art) = t.downloads.artifact.take() {
-            Some(art)
         } else {
-            unreachable!("Found missing artifact")
+            t.downloads.artifact.take()
         };
 
         Ok(Library {
@@ -277,29 +274,6 @@ pub enum Action {
 pub struct Os {
     pub name: String,
     pub version: Option<String>,
-}
-
-#[skip_serializing_none]
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LibraryDownloads {
-    pub artifact: Option<Artifact>,
-    pub classifiers: Option<Classifiers>,
-}
-
-#[skip_serializing_none]
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[serde(deny_unknown_fields)]
-pub struct Classifiers {
-    #[serde(rename = "linux-x86_64")]
-    pub linux_x86_64: Option<Artifact>,
-    pub natives_linux: Option<Artifact>,
-    pub natives_macos: Option<Artifact>,
-    pub natives_osx: Option<Artifact>,
-    pub natives_windows: Option<Artifact>,
-    pub natives_windows_32: Option<Artifact>,
-    pub natives_windows_64: Option<Artifact>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

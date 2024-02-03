@@ -300,42 +300,46 @@ impl AsyncLauncher {
             Some(Ok::<_, Error>((artifact, native)))
         }))
         .try_for_each_concurrent(16, |(artifact, native)| async move {
+            let mut buf: Vec<u8>;
+            let mut fetch = true;
+
             let path = directory.join(Path::new(&artifact.path));
             let parent = path.parent().unwrap();
 
             if tokio::fs::try_exists(&path).await? {
                 let buf = tokio::fs::read(&path).await?;
                 if sha1(&buf) == artifact.sha1 {
-                    let len = buf.len() as u64;
-
-                    if native {
-                        extract_native(native_dir, buf).await?;
-                    }
-
-                    finished.fetch_add(len, std::sync::atomic::Ordering::Relaxed);
-
-                    return Ok(());
+                    fetch = false;
                 } else {
                     tokio::fs::remove_file(&path).await?;
                 }
             }
 
-            let response = self.client.get(&artifact.url).send().await?;
-            let mut buf = Vec::with_capacity(artifact.size as usize);
-            let mut stream = response.bytes_stream();
-            while let Some(next) = stream.next().await {
-                let chunk = next?;
-                finished.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                buf.extend(chunk);
-            }
-            tokio::fs::create_dir_all(parent).await?;
 
-            tokio::fs::write(path, &buf).await?;
+            if fetch {
+                let response = self.client.get(&artifact.url).send().await?;
+                buf = Vec::with_capacity(artifact.size as usize);
+                let mut stream = response.bytes_stream();
+                while let Some(next) = stream.next().await {
+                    let chunk = next?;
+                    finished.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                    buf.extend(chunk);
+                }
+                tokio::fs::create_dir_all(parent).await?;
+
+                tokio::fs::write(path, &buf).await?;
+            } else {
+                buf = tokio::fs::read(&path).await?;
+
+                finished.fetch_add(artifact.size, std::sync::atomic::Ordering::Relaxed);
+            }
+
+
             if native {
-                extract_native(native_dir, buf).await?;
+                extract_native(native_dir, buf).await
+            } else {
+                Ok(())
             }
-
-            Ok(())
         })
         .await?;
 
