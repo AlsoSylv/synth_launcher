@@ -5,9 +5,9 @@ use std::path::Path;
 use std::sync::atomic::AtomicU64;
 
 use crate::account::types::Account;
+use crate::types::Value;
 use futures::{stream, StreamExt, TryStreamExt};
 use tokio::io::AsyncWriteExt;
-use crate::types::Value;
 
 #[cfg(windows)]
 const OS: &str = "windows";
@@ -111,9 +111,7 @@ impl AsyncLauncher {
                 updated
                     .versions
                     .drain(..)
-                    .filter(|v| {
-                        !meta.versions.contains(v)
-                    })
+                    .filter(|v| !meta.versions.contains(v))
                     .collect::<Vec<types::Version>>()
                     .drain(..)
                     .enumerate()
@@ -287,7 +285,10 @@ impl AsyncLauncher {
             // Move to after rule validation to reduce
             path.reserve_exact(library.name.len() + dir.len() + 2);
 
-            let artifact = library.downloads.as_ref()?;
+            let artifact = match &library.downloads {
+                Some(a) => a,
+                None => return None,
+            };
 
             #[cfg(not(windows))]
             path.extend([dir, "/", &artifact.path, ":"]);
@@ -315,7 +316,6 @@ impl AsyncLauncher {
                 }
             }
 
-
             if fetch {
                 let response = self.client.get(&artifact.url).send().await?;
                 buf = Vec::with_capacity(artifact.size as usize);
@@ -333,7 +333,6 @@ impl AsyncLauncher {
 
                 finished.fetch_add(artifact.size, std::sync::atomic::Ordering::Relaxed);
             }
-
 
             if native {
                 extract_native(native_dir, buf).await
@@ -463,14 +462,20 @@ pub fn launch_game(
         match &arg.value {
             Value::Array(arr) => {
                 arr.iter().for_each(|s| {
-                    let arg = apply_jvm_args(s, &natives_dir, launcher_name, launcher_version, class_path);
+                    let arg = apply_jvm_args(
+                        s,
+                        &natives_dir,
+                        launcher_name,
+                        launcher_version,
+                        class_path,
+                    );
                     process.arg(arg);
                 });
             }
             Value::String(s) => {
-                let arg = apply_jvm_args(s, &natives_dir, launcher_name, launcher_version, class_path);
+                let arg =
+                    apply_jvm_args(s, &natives_dir, launcher_name, launcher_version, class_path);
                 process.arg(arg);
-
             }
         }
     });

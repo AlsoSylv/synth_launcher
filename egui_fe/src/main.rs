@@ -578,12 +578,16 @@ impl eframe::App for LauncherGui {
                     egui::ComboBox::from_id_source("VersionSelect")
                         .selected_text(text)
                         .show_ui(ui, |ui| {
-
-                            versions.versions.iter().enumerate().filter(|(_, v)| v.version_type == Type::Release).for_each(|(idx, val)| {
-                                if ui.selectable_value(index, idx, &val.id).clicked() {
-                                    changed = true;
-                                }
-                            });
+                            versions
+                                .versions
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, v)| v.version_type == Type::Release)
+                                .for_each(|(idx, val)| {
+                                    if ui.selectable_value(index, idx, &val.id).clicked() {
+                                        changed = true;
+                                    }
+                                });
                         });
 
                     if changed {

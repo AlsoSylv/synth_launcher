@@ -8,9 +8,9 @@ pub async fn device_response(
     client: &reqwest::Client,
     client_id: &str,
 ) -> Result<types::DeviceCodeResponse, crate::Error> {
-    let val = client
+    Ok(client
         .get("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode")
-        .form(&vec![
+        .form(&[
             ("client_id", client_id),
             ("response_type", "code"),
             ("scope", "XboxLive.signin offline_access"),
@@ -18,9 +18,7 @@ pub async fn device_response(
         .send()
         .await?
         .json()
-        .await?;
-
-    Ok(val)
+        .await?)
 }
 
 pub async fn authorization_token_response(
@@ -28,9 +26,9 @@ pub async fn authorization_token_response(
     device_code: &str,
     client_id: &str,
 ) -> Result<types::AuthorizationTokenResponse, crate::Error> {
-    let val = client
+    Ok(client
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
-        .form(&vec![
+        .form(&[
             ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ("client_id", client_id),
             ("device_code", &device_code),
@@ -38,9 +36,7 @@ pub async fn authorization_token_response(
         .send()
         .await?
         .json()
-        .await?;
-
-    Ok(val)
+        .await?)
 }
 
 pub async fn refresh_token_response(
@@ -48,9 +44,9 @@ pub async fn refresh_token_response(
     refresh_token: &str,
     client_id: &str,
 ) -> Result<types::RefreshTokenResponse, crate::Error> {
-    let val = client
+    Ok(client
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
-        .form(&vec![
+        .form(&[
             ("grant_type", "refresh_token"),
             ("client_id", client_id),
             ("refresh_token", refresh_token),
@@ -58,16 +54,14 @@ pub async fn refresh_token_response(
         .send()
         .await?
         .json()
-        .await?;
-
-    Ok(val)
+        .await?)
 }
 
 pub async fn xbox_response(
     client: &reqwest::Client,
     access_token: &str,
 ) -> Result<types::XboxLiveAuthenticationResponse, crate::Error> {
-    let val = client
+    Ok(client
         .post("https://user.auth.xboxlive.com/user/authenticate")
         .json(&json!({
                 "Properties": {
@@ -81,16 +75,14 @@ pub async fn xbox_response(
         .send()
         .await?
         .json()
-        .await?;
-
-    Ok(val)
+        .await?)
 }
 
 pub async fn xbox_security_token_response(
     client: &reqwest::Client,
     token: &str,
 ) -> Result<types::XboxLiveAuthenticationResponse, crate::Error> {
-    let val = client
+    Ok(client
         .post("https://xsts.auth.xboxlive.com/xsts/authorize")
         // TODO: Replace with struct
         .json(&json!({
@@ -104,9 +96,7 @@ pub async fn xbox_security_token_response(
         .send()
         .await?
         .json()
-        .await?;
-
-    Ok(val)
+        .await?)
 }
 
 pub async fn minecraft_response(
@@ -114,7 +104,7 @@ pub async fn minecraft_response(
     token: &str,
     client: &reqwest::Client,
 ) -> Result<types::MinecraftAuthenticationResponse, crate::Error> {
-    let val = client
+    Ok(client
         .post("https://api.minecraftservices.com/authentication/login_with_xbox")
         .json(&json!({
             "identityToken": format!("XBL3.0 x={};{}", &display_claims["xui"][0]["uhs"], token)
@@ -122,37 +112,31 @@ pub async fn minecraft_response(
         .send()
         .await?
         .json()
-        .await?;
-
-    Ok(val)
+        .await?)
 }
 
 pub async fn minecraft_profile_response(
     access_token: &str,
     client: &reqwest::Client,
 ) -> Result<types::Profile, crate::Error> {
-    let val = client
+    Ok(client
         .get("https://api.minecraftservices.com/minecraft/profile")
         .bearer_auth(access_token)
         .send()
         .await?
         .json()
-        .await?;
-
-    Ok(val)
+        .await?)
 }
 
 pub async fn minecraft_ownership_response(
     access_token: &str,
     client: &reqwest::Client,
 ) -> Result<types::ProductCheck, crate::Error> {
-    let val = client
+    Ok(client
         .get("https://api.minecraftservices.com/entitlements/mcstore")
         .bearer_auth(access_token)
         .send()
         .await?
         .json()
-        .await?;
-
-    Ok(val)
+        .await?)
 }
