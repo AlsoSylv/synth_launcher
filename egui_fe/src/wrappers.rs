@@ -71,9 +71,11 @@ pub async fn get_assets(
     finished: Arc<AtomicU64>,
     tag: Arc<Version>,
 ) -> Response {
+    println!("h");
     let result = launcher_core
         .download_and_store_asset_index(&index, &path.join("assets"), &total, &finished)
         .await;
+    println!("h");
     Response::Tagged(TaggedResponse::Asset(result), tag)
 }
 

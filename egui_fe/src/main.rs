@@ -2,6 +2,7 @@ mod instances;
 mod worker_logic;
 mod wrappers;
 
+use std::cell::Cell;
 use std::fs::File;
 use std::io::Write;
 use worker_logic::*;
@@ -9,7 +10,7 @@ use wrappers::*;
 
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{atomic::Ordering, Arc};
 use std::time::SystemTime;
 
@@ -56,7 +57,9 @@ struct LauncherGui {
     adding_account: bool,
     adding_instance: bool,
     temp_instance: InstanceBuilder,
-    instances: Vec<EguiInstance>,
+    instances: Vec<Rc<EguiInstance>>,
+    current_instance: Option<Rc<EguiInstance>>,
+    quick_playing: bool,
 }
 
 #[derive(Default)]
@@ -152,6 +155,9 @@ struct AccRefreshPair {
 struct EguiInstance {
     i_instance: Rc<Instance>,
     image: Option<Image<'static>>,
+    version_json: Cell<Option<Arc<VersionJson>>>,
+    launching: AtomicBool,
+    prepared: AtomicBool,
 }
 
 #[derive(Default)]
@@ -185,16 +191,21 @@ impl LauncherGui {
     fn new(cc: &eframe::CreationContext) -> Box<Self> {
         let (config_dir, config) = check_file().unwrap();
 
-        let egui_instances: Vec<EguiInstance> = config
+        let egui_instances: Vec<Rc<EguiInstance>> = config
             .instances
             .iter()
-            .map(|instance| EguiInstance {
-                i_instance: instance.clone(),
-                image: instance
-                    .image
-                    .as_ref()
-                    .map(|image| Image::from_uri(format!("file://{}", image.to_string_lossy()))),
-            })
+            .map(|instance| Rc::new(
+                EguiInstance {
+                    i_instance: instance.clone(),
+                    image: instance
+                        .image
+                        .as_ref()
+                        .map(|image| Image::from_uri(format!("file://{}", image.to_string_lossy()))),
+                    version_json: Cell::new(None),
+                    launching: false.into(),
+                    prepared: false.into()
+                }
+            ))
             .collect();
 
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -249,6 +260,8 @@ impl LauncherGui {
             adding_instance: false,
             temp_instance: InstanceBuilder::default(),
             instances: egui_instances,
+            current_instance: None,
+            quick_playing: false,
         }
         .into()
     }
@@ -265,7 +278,16 @@ impl LauncherGui {
                     }
                 },
                 Response::Version(version) => match version {
-                    Ok(json) => self.data.version_json = Some(json.into()),
+                    Ok(json) => {
+                        let arc: Arc<VersionJson> = json.into();
+                        for instances in &mut self.instances {
+                            if instances.i_instance.version.id == arc.id {
+                                println!("{}", arc.id);
+                                instances.version_json.set(Some(arc.clone()));
+                            }
+                        }
+                        self.data.version_json = Some(arc.clone())
+                    },
                     Err(err) => {
                         dbg!("{}", &err);
                         self.current_error = Some(err.into())
@@ -301,7 +323,13 @@ impl LauncherGui {
                         match response {
                             TaggedResponse::Libraries(result) => match result {
                                 Ok(path) => {
-                                    if versions.versions[self.data.selected_version] == tag {
+                                    let v = if let Some(instance) = &self.current_instance {
+                                        &instance.i_instance.version
+                                    } else {
+                                        &versions.versions[self.data.selected_version]
+                                    };
+
+                                    if v == &tag {
                                         self.data.class_path = Some(path);
                                     }
                                 }
@@ -309,7 +337,13 @@ impl LauncherGui {
                             },
                             TaggedResponse::AssetIndex(idx) => match idx {
                                 Ok(json) => {
-                                    if versions.versions[self.data.selected_version] == tag {
+                                    let v = if let Some(instance) = &self.current_instance {
+                                        &instance.i_instance.version
+                                    } else {
+                                        &versions.versions[self.data.selected_version]
+                                    };
+
+                                    if v == &tag {
                                         let index = Arc::new(json);
 
                                         let future = get_assets(
@@ -330,7 +364,13 @@ impl LauncherGui {
                             },
                             TaggedResponse::Asset(result) => match result {
                                 Ok(()) => {
-                                    if versions.versions[self.data.selected_version] == tag {
+                                    let v = if let Some(instance) = &self.current_instance {
+                                        &instance.i_instance.version
+                                    } else {
+                                        &versions.versions[self.data.selected_version]
+                                    };
+
+                                    if v == &tag {
                                         self.data.assets = true;
                                     }
                                 }
@@ -338,7 +378,13 @@ impl LauncherGui {
                             },
                             TaggedResponse::Jar(res) => match res {
                                 Ok(jar) => {
-                                    if versions.versions[self.data.selected_version] == tag {
+                                    let v = if let Some(instance) = &self.current_instance {
+                                        &instance.i_instance.version
+                                    } else {
+                                        &versions.versions[self.data.selected_version]
+                                    };
+
+                                    if v == &tag {
                                         self.data.jar_path = Some(jar);
                                     }
                                 }
@@ -360,11 +406,15 @@ impl LauncherGui {
         }
     }
 
-    fn prepare_launch(&self, json: &Arc<VersionJson>, manifest: &VersionManifestArc) {
+    fn prepare_launch(&self, json: &Arc<VersionJson>, manifest: &VersionManifestArc, tag: Option<Arc<Version>>) {
+        println!("{}", tag.clone().unwrap().id);
         let libraries = json.libraries().clone();
         let index = json.asset_index().clone();
-        let current = self.data.selected_version;
-        let tag = manifest.versions[current].clone();
+        let tag = if let Some(tag) = &tag {
+            tag
+        } else {
+            &manifest.versions[self.data.selected_version]
+        };
 
         let future = get_asset_index(
             self.launcher.clone(),
@@ -393,15 +443,17 @@ impl LauncherGui {
         self.rt.future(future);
     }
 
-    fn maybe_launch(&self) -> bool {
-        if let (Some(class_path), Some(json), Some(acc), Some(jar_path)) = (
+    fn maybe_launch(&self, json: &Arc<VersionJson>, jvm: Option<&Jvm>, current: bool) -> bool {
+        if let (Some(class_path), Some(acc), Some(jar_path)) = (
             &self.data.class_path,
-            &self.data.version_json,
             self.player.account,
             &self.data.jar_path,
         ) {
             if self.data.assets && self.data.launching {
-                let jvm = if let Some(jvm) = self.jvm_index {
+                println!("{}", json.id);
+                let jvm = if let Some(jvm) = jvm {
+                    jvm.path.as_str()
+                } else if let Some(jvm) = self.jvm_index {
                     &self.launcher_data.jvms[jvm].path
                 } else {
                     "java"
@@ -419,12 +471,12 @@ impl LauncherGui {
                     "0.1.0",
                     &format!("{}{}", class_path, jar_path),
                 );
-                !self.data.launching
+                !current
             } else {
-                self.data.launching
+                current
             }
         } else {
-            self.data.launching
+            current
         }
     }
 
@@ -660,8 +712,9 @@ impl eframe::App for LauncherGui {
                         let enabled = ui.add_enabled(enabled, button);
 
                         if enabled.clicked() {
-                            self.prepare_launch(version_json, &versions);
+                            self.prepare_launch(version_json, &versions, None);
                             self.data.launching = true;
+                            self.quick_playing = true;
                         }
                     } else {
                         ui.add_enabled(false, button);
@@ -788,9 +841,12 @@ impl eframe::App for LauncherGui {
                     let egui_i = EguiInstance {
                         i_instance: instance.clone(),
                         image,
+                        version_json: Cell::new(None),
+                        launching: false.into(),
+                        prepared: false.into()
                     };
 
-                    self.instances.push(egui_i);
+                    self.instances.push(Rc::new(egui_i));
                     self.adding_instance = false;
                     self.data_updated = true;
                 }
@@ -798,25 +854,72 @@ impl eframe::App for LauncherGui {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            for instances in self.instances.iter() {
                 egui::Grid::new("instance grid")
                     .min_col_width(ui.available_width())
                     .show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            if let Some(image) = &instances.image {
-                                ui.add(image.clone());
+                        for instances in self.instances.iter() {
+                            let mut clicked = false;
+                            ui.vertical(|ui| {
+                                if let Some(image) = &instances.image {
+                                    ui.add(image.clone());
+                                }
+                                ui.label(&instances.i_instance.name);
+                                ui.label(&instances.i_instance.version.id);
+                                ui.label(&instances.i_instance.jvm.name);
+
+                                let button = Button::new("Play");
+
+
+                                if let Some(manifest) = &self.data.versions {
+                                    let enabled = !self.data.launching && self.player.account.is_some();
+
+                                    let res = ui.add_enabled(enabled, button);
+
+                                    if res.clicked() {
+                                        let launcher = self.launcher.clone();
+                                        let version = instances.i_instance.version.clone();
+                                        let path = self.launcher_path.clone();
+                                        self.rt.future(get_version(launcher, version, path));
+                                        instances.launching.store(true, Ordering::Relaxed);
+                                        instances.prepared.store(false, Ordering::Relaxed);
+                                        clicked = true
+                                    }
+
+                                    if let Some(json) = instances.version_json.take() {
+                                        if instances.launching.load(Ordering::Relaxed) {
+                                            if !instances.prepared.load(Ordering::Relaxed) {
+                                                let version = instances.i_instance.version.clone();
+                                                self.prepare_launch(&json, manifest, Some(version));
+                                                instances.prepared.store(true, Ordering::Relaxed);
+                                            }
+
+                                            let maybe_launched = self.maybe_launch(&json, Some(&instances.i_instance.jvm), true);
+
+                                            instances.launching.store(maybe_launched, Ordering::Relaxed);
+                                        }
+
+                                        instances.version_json.set(Some(json));
+                                    }
+                                } else {
+                                    ui.add_enabled(false, button);
+                                }
+                            });
+
+                            if clicked {
+                                self.current_instance = Some(instances.clone());
+                                self.data.launching = true;
                             }
-                            ui.label(&instances.i_instance.name);
-                            ui.label(&instances.i_instance.version.id);
-                            ui.label(&instances.i_instance.jvm.name);
-                        });
+                        }
                     });
-            }
         });
 
-        self.data.launching = self.maybe_launch();
-
         if self.data.launching {
+            if let Some(json) = &self.data.version_json {
+                if self.quick_playing {
+                    self.data.launching = self.maybe_launch(json, None, self.data.launching);
+                    self.quick_playing = self.data.launching;
+                }
+            }
             self.progress_window(ctx);
         }
 

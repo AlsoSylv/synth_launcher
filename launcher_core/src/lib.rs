@@ -1,5 +1,3 @@
-extern crate core;
-
 use std::fmt::Display;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
@@ -268,7 +266,7 @@ impl AsyncLauncher {
             let dir = directory.to_str().unwrap();
             let mut native = library.natives.is_some();
 
-            if let Some(rule) = &library.rules {
+            if let Some(rule) = &library.rule {
                 if !rule.applies() {
                     return None;
                 }
@@ -454,7 +452,7 @@ pub fn launch_game(
 
     json.arguments.jvm.iter().for_each(|arg| {
         if let Some(rules) = &arg.rules {
-            if !rules.iter().all(types::JvmRule::applies) {
+            if !rules.applies() {
                 return;
             }
         }

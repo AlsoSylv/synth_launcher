@@ -121,7 +121,7 @@ pub struct AssetIndex {
 pub struct Library {
     pub downloads: Option<Artifact>,
     pub name: String,
-    pub rules: Option<Rule>,
+    pub rule: Option<Rule>,
     pub natives: Option<Natives>,
 }
 
@@ -160,7 +160,7 @@ impl<'de> Deserialize<'de> for Library {
 
         let mut t = TempLibrary::deserialize(deserializer)?;
 
-        let rules = if let Some(mut rules) = t.rules.take() {
+        let rule = if let Some(mut rules) = t.rules.take() {
             let idx = match rules.as_slice() {
                 [rule_1, _] => {
                     if rule_1.os.is_some() && rule_1.action == Action::Disallow {
@@ -200,7 +200,7 @@ impl<'de> Deserialize<'de> for Library {
         Ok(Library {
             downloads: artifact,
             name: t.name,
-            rules,
+            rule,
             natives: t.natives,
         })
     }
@@ -288,9 +288,10 @@ pub struct Artifact {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssetIndexJson {
-    #[serde(skip_deserializing)]
-    #[allow(unused)]
-    map_to_resources: Option<bool>,
+    #[serde(skip_serializing, alias = "map_to_resources")]
+    _map_to_resources: Option<bool>,
+    #[serde(skip_serializing, alias = "virtual")]
+    _virtual: Option<bool>,
     pub objects: std::collections::HashMap<String, Object>,
 }
 
@@ -317,7 +318,7 @@ impl<'de> Deserialize<'de> for Arguments {
         #[serde(deny_unknown_fields)]
         struct TempArguments {
             pub game: Vec<GameElement>,
-            pub jvm: Vec<JvmClass>,
+            pub jvm: Vec<TempJvmClass>,
         }
 
         #[derive(Deserialize)]
@@ -327,13 +328,92 @@ impl<'de> Deserialize<'de> for Arguments {
             String(String),
         }
 
+        pub struct TempJvmClass {
+            pub rules: Option<Vec<JvmRule>>,
+            pub value: Value,
+        }
+
+        impl<'de> serde::de::Deserialize<'de> for TempJvmClass {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                #[derive(Deserialize)]
+                struct Temp {
+                    pub rules: Option<Vec<JvmRule>>,
+                    pub value: Value,
+                }
+
+                #[derive(Deserialize)]
+                #[serde(untagged)]
+                enum TempClass {
+                    Class(Temp),
+                    String(String),
+                }
+
+                let v = TempClass::deserialize(deserializer)?;
+
+                Ok(match v {
+                    TempClass::Class(c) => TempJvmClass {
+                        value: c.value,
+                        rules: c.rules,
+                    },
+                    TempClass::String(s) => TempJvmClass {
+                        value: Value::String(s),
+                        rules: None,
+                    },
+                })
+            }
+        }
+
         let v = TempArgs::deserialize(deserializer)?;
 
         let r = match v {
-            TempArgs::Args(t) => Arguments {
-                jvm: t.jvm,
-                game: t.game,
-            },
+            TempArgs::Args(t) => {
+                let jvm = t
+                    .jvm
+                    .into_iter()
+                    .map(|mut j| {
+                        let rule = if let Some(mut rules) = j.rules.take() {
+                            let idx = match rules.as_slice() {
+                                [rule_1, _] => {
+                                    if rule_1.os.name.is_some() && rule_1.action == Action::Disallow
+                                    {
+                                        0
+                                    } else {
+                                        1
+                                    }
+                                }
+                                [_] => 0,
+                                _e => unreachable!("{_e:?}"),
+                            };
+
+                            Some(rules.remove(idx))
+                        } else {
+                            None
+                        };
+
+                        JvmClass {
+                            value: j.value,
+                            rules: rule,
+                        }
+                    })
+                    .collect();
+
+                t.game.iter().for_each(|g| {
+                   if let GameElement::GameClass(g) = &g {
+                       if let Some(r) = &g.rules {
+                           for x in r {
+                               if x.action == Action::Disallow {
+                                   panic!()
+                               }
+                           }
+                       }
+                   }
+                });
+
+                Arguments { jvm, game: t.game }
+            }
             TempArgs::String(s) => Arguments {
                 jvm: vec![
                     "-Djava.library.path=${natives_directory}",
@@ -385,23 +465,32 @@ pub struct GameRule {
     pub features: Features,
 }
 
-#[skip_serializing_none]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Features {
-    pub is_demo_user: Option<bool>,
-    pub has_custom_resolution: Option<bool>,
-    pub has_quick_plays_support: Option<bool>,
-    pub is_quick_play_singleplayer: Option<bool>,
-    pub is_quick_play_multiplayer: Option<bool>,
-    pub is_quick_play_realms: Option<bool>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_demo_user: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_custom_resolution: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_quick_plays_support: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_quick_play_singleplayer: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_quick_play_multiplayer: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_quick_play_realms: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 #[skip_serializing_none]
 #[derive(Debug, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct JvmClass {
-    pub rules: Option<Vec<JvmRule>>,
+    pub rules: Option<JvmRule>,
     pub value: Value,
 }
 
@@ -410,39 +499,6 @@ pub struct JvmClass {
 pub enum Value {
     Array(Box<[String]>),
     String(String),
-}
-
-impl<'de> serde::de::Deserialize<'de> for JvmClass {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct Temp {
-            pub rules: Option<Vec<JvmRule>>,
-            pub value: Value,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum TempClass {
-            Class(Temp),
-            String(String),
-        }
-
-        let v = TempClass::deserialize(deserializer)?;
-
-        Ok(match v {
-            TempClass::Class(c) => JvmClass {
-                value: c.value,
-                rules: c.rules,
-            },
-            TempClass::String(s) => JvmClass {
-                value: Value::String(s),
-                rules: None,
-            },
-        })
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
