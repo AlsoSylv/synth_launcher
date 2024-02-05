@@ -3,18 +3,18 @@ use std::path::Path;
 use std::sync::atomic::AtomicU64;
 
 use crate::account::types::Account;
-use crate::types::Value;
+use crate::types::{OsName, Value};
 use futures::{stream, StreamExt, TryStreamExt};
 use tokio::io::AsyncWriteExt;
 
 #[cfg(windows)]
-const OS: &str = "windows";
+const OS: OsName = OsName::Windows;
 
 #[cfg(target_os = "macos")]
-const OS: &str = "osx";
+const OS: OsName = OsName::Osx;
 
 #[cfg(target_os = "linux")]
-const OS: &str = "linux";
+const OS: OsName = OsName::Linux;
 
 pub mod account;
 pub mod types;

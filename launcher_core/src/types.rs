@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::skip_serializing_none;
 use std::sync::Arc;
@@ -47,6 +48,19 @@ pub enum Type {
     Snapshot,
 }
 
+impl Deref for Type {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Type::OldAlpha => { "old_alpha" }
+            Type::OldBeta => { "old_beta" }
+            Type::Release => { "release" }
+            Type::Snapshot => { "snapshot" }
+        }
+    }
+}
+
 #[skip_serializing_none]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,7 +80,7 @@ pub struct VersionJson {
     pub release_time: String,
     pub time: String,
     #[serde(rename = "type")]
-    pub welcome_type: String,
+    pub release_type: Type,
     pub libraries: Arc<[Library]>,
 }
 
@@ -94,8 +108,8 @@ impl VersionJson {
         &self.asset_index
     }
 
-    pub fn release_type(&self) -> &str {
-        &self.welcome_type
+    pub fn release_type(&self) -> &Type {
+        &self.release_type
     }
 
     pub fn main_class(&self) -> &str {
@@ -272,8 +286,16 @@ pub enum Action {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Os {
-    pub name: String,
+    pub name: OsName,
     pub version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum OsName {
+    Windows,
+    Linux,
+    Osx,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -511,7 +533,7 @@ pub struct JvmRule {
 impl JvmRule {
     pub fn applies(&self) -> bool {
         if let Some(os) = &self.os.name {
-            os == OS && self.action == Action::Allow
+            os == &OS && self.action == Action::Allow
         } else {
             self.action == Action::Allow
         }
@@ -522,7 +544,7 @@ impl JvmRule {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PurpleOs {
-    pub name: Option<String>,
+    pub name: Option<OsName>,
     pub arch: Option<String>,
     pub version: Option<String>,
 }
