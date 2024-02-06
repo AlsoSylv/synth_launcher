@@ -4,8 +4,10 @@ use std::sync::atomic::AtomicU64;
 
 use crate::account::types::Account;
 use crate::types::{OsName, Value};
-use futures::{stream, StreamExt, TryStreamExt};
-use tokio::io::AsyncWriteExt;
+use futures::{stream, Stream, StreamExt, TryStreamExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_util::bytes;
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 #[cfg(windows)]
 const OS: OsName = OsName::Windows;
@@ -225,25 +227,45 @@ impl AsyncLauncher {
                 let dir_path = object_path.join(first_two);
                 let file_path = dir_path.join(&asset.hash);
 
-                if tokio::fs::try_exists(&file_path).await? {
-                    let buf = tokio::fs::read(&file_path).await?;
-                    if sha1(&buf) == asset.hash {
+                if file_path.exists() {
+                    let mut buf = [0; 64 * 1024];
+                    let mut file = tokio::fs::File::open(&file_path).await?;
+                    let mut hasher = sha1_smol::Sha1::new();
+
+                    let mut total_read = 0;
+                    loop {
+                        let read_bytes = file.read(&mut buf).await?;
+                        total_read += read_bytes;
+                        hasher.update(&buf[..read_bytes]);
+                        if total_read == asset.size as usize {
+                            break;
+                        }
+                    }
+
+                    let hash = hasher.digest().to_string();
+
+                    if hasher.digest().to_string() == asset.hash {
                         finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
                         return Ok(());
                     } else {
+                        println!("Hash was wrong, expected: {}, but found: {hash}", asset.hash);
                         tokio::fs::remove_file(&file_path).await?;
                     }
-                } else if !tokio::fs::try_exists(&dir_path).await? {
+                } else if !dir_path.exists() {
                     tokio::fs::create_dir_all(dir_path).await?;
-                }
+                };
 
                 let url = format!("{}/{}/{}", ASSET_BASE_URL, first_two, &asset.hash);
-
                 let response = self.client.get(url).send().await?;
-                let bytes = response.bytes().await?;
-                tokio::fs::write(&file_path, bytes).await?;
+                let mut bytes = response.bytes_stream();
+                let mut file = tokio::fs::File::create(&file_path).await?;
 
-                finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
+                while let Some(chunk) = bytes.next().await {
+                    let chunk = chunk.unwrap();
+                    file.write_all(&chunk).await?;
+                    finished.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                }
+
                 Ok(())
             })
             .await
@@ -263,15 +285,10 @@ impl AsyncLauncher {
         total.store(0, std::sync::atomic::Ordering::Relaxed);
 
         stream::iter(libraries.iter().filter_map(|library| {
-            let dir = directory.to_str().unwrap();
-            let mut native = library.natives.is_some();
+            let native = library.rule.native() | library.natives.is_some();
 
-            if let Some(rule) = &library.rule {
-                if !rule.applies() {
-                    return None;
-                }
-
-                native |= rule.native();
+            if !library.rule.apply() {
+                return None;
             }
 
             if let Some(natives) = &library.natives {
@@ -280,14 +297,10 @@ impl AsyncLauncher {
                 }
             }
 
-            // Move to after rule validation to reduce
-            path.reserve_exact(library.name.len() + dir.len() + 2);
-
-            let artifact = match &library.downloads {
-                Some(a) => a,
-                None => return None,
+            let Some(artifact) = &library.downloads else {
+                return None;
             };
-
+            let dir = directory.to_str().unwrap();
             #[cfg(not(windows))]
             path.extend([dir, "/", &artifact.path, ":"]);
 
@@ -299,13 +312,12 @@ impl AsyncLauncher {
             Some(Ok::<_, Error>((artifact, native)))
         }))
         .try_for_each_concurrent(16, |(artifact, native)| async move {
-            let mut buf: Vec<u8>;
             let mut fetch = true;
 
             let path = directory.join(Path::new(&artifact.path));
             let parent = path.parent().unwrap();
 
-            if tokio::fs::try_exists(&path).await? {
+            if path.exists() {
                 let buf = tokio::fs::read(&path).await?;
                 if sha1(&buf) == artifact.sha1 {
                     fetch = false;
@@ -315,30 +327,22 @@ impl AsyncLauncher {
             }
 
             if fetch {
-                let response = self.client.get(&artifact.url).send().await?;
-                buf = Vec::with_capacity(artifact.size as usize);
-                let mut stream = response.bytes_stream();
-                while let Some(next) = stream.next().await {
-                    let chunk = next?;
-                    finished.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                    buf.extend(chunk);
-                }
                 tokio::fs::create_dir_all(parent).await?;
 
-                tokio::fs::write(path, &buf).await?;
+                let response = self.client.get(&artifact.url).send().await?;
+                let mut stream = response.bytes_stream();
+                let mut file = tokio::fs::File::create(&path).await?;
+                write_file(&mut file, &mut stream, finished).await?;
             } else {
-                buf = tokio::fs::read(&path).await?;
-
                 finished.fetch_add(artifact.size, std::sync::atomic::Ordering::Relaxed);
             }
 
             if native {
-                extract_native(native_dir, buf).await
+                extract_native(native_dir, &path).await
             } else {
                 Ok(())
             }
-        })
-        .await?;
+        }).await?;
 
         Ok(path)
     }
@@ -377,50 +381,52 @@ impl AsyncLauncher {
         total_bytes.store(len, std::sync::atomic::Ordering::Relaxed);
 
         let mut stream = jar.bytes_stream();
-        while let Some(next) = stream.next().await {
-            let chunk = next?;
-            file.write_all(&chunk).await?;
-            finished_bytes.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
-        }
+        write_file(&mut file, &mut stream, finished_bytes).await?;
 
         Ok(str)
     }
 }
 
-async fn extract_native(native_dir: &Path, buf: Vec<u8>) -> Result<(), Error> {
+async fn write_file<S>(file: &mut tokio::fs::File, stream: &mut S, bytes: &AtomicU64) -> Result<(), Error> where S: Stream<Item=reqwest::Result<bytes::Bytes>> + Unpin {
+    while let Some(next) = stream.next().await {
+        let chunk = next?;
+        file.write_all(&chunk).await?;
+        bytes.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    Ok(())
+}
+
+async fn extract_native(native_dir: &Path, path: &Path) -> Result<(), Error> {
     if !tokio::fs::try_exists(native_dir).await? {
         tokio::fs::create_dir_all(native_dir).await?;
     }
 
-    let reader = async_zip::base::read::mem::ZipFileReader::new(buf)
+    let reader = async_zip::tokio::read::fs::ZipFileReader::new(path)
         .await
         .unwrap();
-    for index in 0..reader.file().entries().len() {
-        use tokio_util::compat::FuturesAsyncReadCompatExt;
-
-        let mut entry_reader = reader.reader_with_entry(index).await.unwrap().compat();
-        let entry = reader.file().entries().get(index).unwrap();
+    for (idx, entry) in reader.file().entries().iter().enumerate() {
         if entry.dir().unwrap() {
             continue;
-        } else {
-            let file_path = entry.filename().as_str().unwrap();
-            let file = file_path.split('/').last().unwrap();
+        }
+        let file_path = entry.filename().as_str().unwrap();
 
-            #[cfg(windows)]
+        #[cfg(windows)]
             let ends_with = ".dll";
-            #[cfg(target_os = "linux")]
+        #[cfg(target_os = "linux")]
             let ends_with = ".so";
-            #[cfg(target_os = "macos")]
+        #[cfg(target_os = "macos")]
             let ends_with = ".dylib";
 
-            if !file.ends_with(ends_with) {
-                continue;
-            }
-
-            let mut buffer = Vec::new();
-            tokio::io::copy(&mut entry_reader, &mut buffer).await?;
-            tokio::fs::write(native_dir.join(file), &buffer).await?;
+        if !file_path.ends_with(ends_with) {
+            continue;
         }
+
+        let file = file_path.split('/').last().unwrap();
+        let mut entry_reader = reader.reader_without_entry(idx).await.unwrap().compat();
+        let mut buffer = Vec::with_capacity(entry.uncompressed_size() as usize);
+        tokio::io::copy(&mut entry_reader, &mut buffer).await?;
+        tokio::fs::write(native_dir.join(file), &buffer).await?;
     }
 
     Ok(())

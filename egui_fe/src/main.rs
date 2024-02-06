@@ -10,7 +10,7 @@ use wrappers::*;
 
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::AtomicU64;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::SystemTime;
 
@@ -127,7 +127,7 @@ impl From<VersionManifest> for VersionManifestArc {
 }
 
 impl VersionManifestArc {
-    pub fn latest_release(&self) -> &Version {
+    pub fn latest_release(&self) -> &Arc<Version> {
         for version in &self.versions {
             if version.id == self.latest.release {
                 return version;
@@ -156,8 +156,8 @@ struct EguiInstance {
     i_instance: Rc<Instance>,
     image: Option<Image<'static>>,
     version_json: Cell<Option<Arc<VersionJson>>>,
-    launching: AtomicBool,
-    prepared: AtomicBool,
+    launching: Cell<bool>,
+    prepared: Cell<bool>,
 }
 
 #[derive(Default)]
@@ -282,7 +282,6 @@ impl LauncherGui {
                         let arc: Arc<VersionJson> = json.into();
                         for instances in &mut self.instances {
                             if instances.i_instance.version.id == arc.id {
-                                println!("{}", arc.id);
                                 instances.version_json.set(Some(arc.clone()));
                             }
                         }
@@ -407,7 +406,6 @@ impl LauncherGui {
     }
 
     fn prepare_launch(&self, json: &Arc<VersionJson>, manifest: &VersionManifestArc, tag: Option<Arc<Version>>) {
-        println!("{}", tag.clone().unwrap().id);
         let libraries = json.libraries().clone();
         let index = json.asset_index().clone();
         let tag = if let Some(tag) = &tag {
@@ -450,7 +448,6 @@ impl LauncherGui {
             &self.data.jar_path,
         ) {
             if self.data.assets && self.data.launching {
-                println!("{}", json.id);
                 let jvm = if let Some(jvm) = jvm {
                     jvm.path.as_str()
                 } else if let Some(jvm) = self.jvm_index {
@@ -644,7 +641,6 @@ impl eframe::App for LauncherGui {
 
                     if changed {
                         let version = &versions.versions[*index];
-                        println!("{}", version.id);
                         let launcher = self.launcher.clone();
                         let version = version.clone();
                         let path = self.launcher_path.clone();
@@ -880,22 +876,22 @@ impl eframe::App for LauncherGui {
                                         let version = instances.i_instance.version.clone();
                                         let path = self.launcher_path.clone();
                                         self.rt.future(get_version(launcher, version, path));
-                                        instances.launching.store(true, Ordering::Relaxed);
-                                        instances.prepared.store(false, Ordering::Relaxed);
+                                        instances.launching.replace(true);
+                                        instances.prepared.replace(false);
                                         clicked = true
                                     }
 
                                     if let Some(json) = instances.version_json.take() {
-                                        if instances.launching.load(Ordering::Relaxed) {
-                                            if !instances.prepared.load(Ordering::Relaxed) {
+                                        if instances.launching.get() {
+                                            if !instances.prepared.get() {
                                                 let version = instances.i_instance.version.clone();
                                                 self.prepare_launch(&json, manifest, Some(version));
-                                                instances.prepared.store(true, Ordering::Relaxed);
+                                                instances.prepared.replace(true);
                                             }
 
                                             let maybe_launched = self.maybe_launch(&json, Some(&instances.i_instance.jvm), true);
 
-                                            instances.launching.store(maybe_launched, Ordering::Relaxed);
+                                            instances.launching.replace(maybe_launched);
                                         }
 
                                         instances.version_json.set(Some(json));

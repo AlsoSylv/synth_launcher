@@ -135,7 +135,7 @@ pub struct AssetIndex {
 pub struct Library {
     pub downloads: Option<Artifact>,
     pub name: String,
-    pub rule: Option<Rule>,
+    pub rule: Rule,
     pub natives: Option<Natives>,
 }
 
@@ -187,9 +187,9 @@ impl<'de> Deserialize<'de> for Library {
                 _e => unreachable!("{_e:?}"),
             };
 
-            Some(rules.remove(idx))
+            rules.remove(idx)
         } else {
-            None
+            Rule { action: Action::Allow, os: None }
         };
 
         let artifact = if let Some(mut classifier) = t.downloads.classifiers.take() {
@@ -255,7 +255,7 @@ pub struct Rule {
 }
 
 impl Rule {
-    pub fn applies(&self) -> bool {
+    pub fn apply(&self) -> bool {
         if let Some(os) = &self.os {
             os.name == OS && self.action == Action::Allow
                 || os.name != OS && self.action == Action::Disallow
