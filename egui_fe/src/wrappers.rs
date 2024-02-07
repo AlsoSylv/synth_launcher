@@ -1,7 +1,6 @@
 use crate::worker_logic::{Response, TaggedResponse};
 use launcher_core::types::{AssetIndex, AssetIndexJson, Library, Version, VersionJson};
-use launcher_core::{AsyncLauncher, Error};
-use std::io::Read;
+use launcher_core::AsyncLauncher;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -77,41 +76,8 @@ pub async fn get_assets(
     Response::Tagged(TaggedResponse::Asset(result), tag)
 }
 
-pub async fn get_major_version_response(jvm: Arc<String>) -> Response {
-    Response::JavaMajorVersion(get_major_version(&jvm).await)
-}
-
-pub async fn get_default_version_response() -> Response {
-    Response::DefaultJavaVersion(get_major_version("java").await)
-}
-
 /// Compiled Java byte-code to check for the current Java Version
 const CHECKER_CLASS: &[u8] = include_bytes!("VersionPrinter.class");
-
-/// Gets the Java Version of a JVM
-async fn get_major_version(jvm: &str) -> Result<u32, Error> {
-    let tmp = std::env::temp_dir();
-    let checker_class_file = tmp.join("VersionPrinter.class");
-    tokio::fs::write(checker_class_file, CHECKER_CLASS).await?;
-    let process = std::process::Command::new(jvm)
-        .current_dir(tmp)
-        .arg("VersionPrinter")
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut io = process.stdout.expect("Wtf I hate it here");
-    let mut string = String::new();
-    io.read_to_string(&mut string)?;
-    let mut split = string.split('.');
-    let next = split.next().unwrap();
-    let version = if next == "1" {
-        split.next().unwrap()
-    } else {
-        next
-    };
-
-    Ok(version.parse().unwrap())
-}
 
 pub fn get_vendor_major_version(jvm: &str) -> (String, u32) {
     let tmp = std::env::temp_dir();

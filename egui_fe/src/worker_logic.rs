@@ -27,8 +27,6 @@ pub enum Response {
     Version(Result<Box<VersionJson>, Error>),
     Tagged(TaggedResponse, Arc<Version>),
     Auth(Result<(Account, String), Error>),
-    JavaMajorVersion(Result<u32, Error>),
-    DefaultJavaVersion(Result<u32, Error>),
 }
 
 pub enum TaggedResponse {
