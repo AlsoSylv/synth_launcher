@@ -136,7 +136,6 @@ pub struct Library {
     pub downloads: Option<Artifact>,
     pub name: String,
     pub rule: Rule,
-    pub natives: Option<Natives>,
 }
 
 impl<'de> Deserialize<'de> for Library {
@@ -145,12 +144,19 @@ impl<'de> Deserialize<'de> for Library {
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         pub struct TempLibrary {
             pub downloads: LibraryDownloads,
             pub name: String,
             pub rules: Option<Vec<Rule>>,
             pub extract: Option<Extract>,
             pub natives: Option<Natives>,
+        }
+
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        pub struct Extract {
+            pub exclude: Vec<String>,
         }
 
         #[derive(Deserialize)]
@@ -174,7 +180,7 @@ impl<'de> Deserialize<'de> for Library {
 
         let mut t = TempLibrary::deserialize(deserializer)?;
 
-        let rule = if let Some(mut rules) = t.rules.take() {
+        let mut rule = if let Some(mut rules) = t.rules.take() {
             let idx = match rules.as_slice() {
                 [rule_1, _] => {
                     if rule_1.os.is_some() && rule_1.action == Action::Disallow {
@@ -211,11 +217,16 @@ impl<'de> Deserialize<'de> for Library {
             t.downloads.artifact.take()
         };
 
+        if let Some(natives) = &t.natives {
+            if natives.applies() && rule.os.is_none() {
+                rule.os = Some(Os { name: OS, version: None });
+            }
+        }
+
         Ok(Library {
             downloads: artifact,
             name: t.name,
             rule,
-            natives: t.natives,
         })
     }
 }
@@ -238,12 +249,6 @@ pub struct Natives {
     pub linux: Option<String>,
     pub osx: Option<String>,
     pub windows: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Extract {
-    pub exclude: Vec<String>,
 }
 
 #[skip_serializing_none]

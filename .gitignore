@@ -1,1 +1,18 @@
 /target
+# Default ignored files
+/cs_gui/shelf/
+/cs_gui/workspace.xml
+# Rider ignored files
+/cs_gui/projectSettingsUpdater.xml
+/cs_gui/modules.xml
+/cs_gui/.idea.cs_gui.iml
+/cs_gui/contentModel.xml
+# Editor-based HTTP Client requests
+/cs_gui/httpRequests/
+# Datasource local storage ignored files
+/cs_gui/dataSources/
+/cs_gui/dataSources.local.xml
+/cs_gui/bin/
+/cs_gui/obj/
+/cs_gui/.idea/
+/.idea/

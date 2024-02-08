@@ -284,22 +284,18 @@ impl AsyncLauncher {
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
         total.store(0, std::sync::atomic::Ordering::Relaxed);
 
+        #[allow(clippy::question_mark)]
         stream::iter(libraries.iter().filter_map(|library| {
-            let native = library.rule.native() | library.natives.is_some();
+            let native = library.rule.native();
+
+            let Some(artifact) = &library.downloads else {
+                return None;
+            };
 
             if !library.rule.apply() {
                 return None;
             }
 
-            if let Some(natives) = &library.natives {
-                if !natives.applies() {
-                    return None;
-                }
-            }
-
-            let Some(artifact) = &library.downloads else {
-                return None;
-            };
             let dir = directory.to_str().unwrap();
             #[cfg(not(windows))]
             path.extend([dir, "/", &artifact.path, ":"]);
