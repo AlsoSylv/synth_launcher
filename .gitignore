@@ -14,5 +14,8 @@
 /cs_gui/dataSources.local.xml
 /cs_gui/bin/
 /cs_gui/obj/
+/cs_gui/csbindings.dll
+/cs_gui/libcsbindings.so
+/cs_gui/libcsbindings.dylib
 /cs_gui/.idea/
 /.idea/

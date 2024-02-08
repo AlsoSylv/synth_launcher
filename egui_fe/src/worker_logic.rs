@@ -40,11 +40,7 @@ pub enum TaggedResponse {
 pub struct State {
     pub client: Client,
     pub launcher_core: Arc<launcher_core::AsyncLauncher>,
-    pub tx: Sender<EarlyMessage>,
-}
-
-pub enum EarlyMessage {
-    LinkCode((String, String)),
+    pub tx: Sender<(String, String)>,
 }
 
 pub async fn worker_event_loop(message: Message, state: &State) -> Response {
@@ -66,7 +62,7 @@ pub async fn worker_event_loop(message: Message, state: &State) -> Response {
 
 async fn auth_or_refresh(
     client: &Client,
-    tx: &Sender<EarlyMessage>,
+    tx: &Sender<(String, String)>,
     refresh_token: Option<&str>,
     client_id: &str,
 ) -> Result<(Account, String), Error> {
@@ -82,7 +78,7 @@ async fn auth_or_refresh(
         let code = device_response.user_code;
         let ms_url = device_response.verification_uri;
 
-        tx.send(EarlyMessage::LinkCode((ms_url, code)))
+        tx.send((ms_url, code))
             .await
             .unwrap();
 

@@ -3,7 +3,8 @@ members = [
     "launcher_core",
     "egui_fe",
     "egui_fe/async_bridge",
-    "cs_gui/csbindings"
+    "cs_gui/csbindings",
+    "gtk_fe",
 ]
 resolver = "2"
 

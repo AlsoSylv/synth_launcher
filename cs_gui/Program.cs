@@ -1,6 +1,5 @@
 ﻿using Avalonia;
 using System;
-using System.Text;
 using System.Threading.Tasks;
 using CsBindgen;
 
@@ -20,11 +19,11 @@ class Program
 
         task.Wait();
         
-        Console.Write(handle.get_latest_release());
+        Console.WriteLine(handle.get_latest_release());
 
         for (nuint i = 0; i < handle.manifest_len(); i++)
         {
-            Console.WriteLine(handle.get_version_id(i));
+            Console.WriteLine(handle.get_version_id(i) + " " + handle.get_version_type(i));
         } 
 
         // BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
@@ -42,46 +41,66 @@ class Program
 
 class SafeNativeMethods
 {
-    private readonly unsafe LauncherPointer* _launcher;
-    private unsafe ManifestWrapper* _manifest;
-
-    public SafeNativeMethods()
-    {
-        unsafe
-        {
-            _launcher = NativeMethods.new_launcher();
-        }
-    }
-
+    private unsafe ManifestWrapper* _manifest = null;
+    
     public Task get_manifest()
     {
         return Task.Run(() =>
         {
             unsafe
             {
-                var task = NativeMethods.get_version_manifest(this._launcher);
-                while (!NativeMethods.poll_manifest_task(task))
+                var taskPointer = NativeMethods.get_version_manifest();
+                while (!NativeMethods.poll_manifest_task(taskPointer))
                 {
                     
                 }
 
-                _manifest = NativeMethods.get_manifest(task);
+                var manifestPointer = NativeMethods.get_manifest_wrapper();
+                var value = NativeMethods.get_manifest(taskPointer, manifestPointer);
+
+                switch (value.code)
+                {
+                    case Code.Success:
+                    {
+                        _manifest = manifestPointer;
+                        break;
+                    }
+                }
             }
         });
+    }
+
+    public bool is_manifest_loaded()
+    {
+        unsafe
+        {
+            return _manifest != null;
+        }
     }
 
     public string get_latest_release()
     {
         unsafe
         {
+            check_manifest_internal();
+            
             var rawString = NativeMethods.get_latest_release(_manifest);
-            var builder = new StringBuilder();
-            for (nuint i = 0; i < rawString.len; i++)
-            {
-                builder.Append(Convert.ToChar(*(rawString.char_ptr + i)));
-            }
+            var str = new ReadOnlySpan<char>(rawString.char_ptr, (int) rawString.len).ToString();
 
-            return builder.ToString();
+            NativeMethods.free_string_wrapper(rawString);
+
+            return str;
+        }
+    }
+
+    private void check_manifest_internal()
+    {
+        unsafe
+        {
+            if (_manifest == null)
+            {
+                throw new NullReferenceException("The manifest was not loaded at the time this was called");
+            }
         }
     }
 
@@ -89,6 +108,8 @@ class SafeNativeMethods
     {
         unsafe
         {
+            check_manifest_internal();
+            
             return NativeMethods.get_manifest_len(_manifest);
         }
     }
@@ -97,14 +118,32 @@ class SafeNativeMethods
     {
         unsafe
         {
+            check_manifest_internal();
+            
             var rawString = NativeMethods.get_name(_manifest, index);
-            var builder = new StringBuilder();
-            for (nuint i = 0; i < rawString.len; i++)
-            {
-                builder.Append(Convert.ToChar(*(rawString.char_ptr + i)));
-            }
+            var str = new ReadOnlySpan<char>(rawString.char_ptr, (int) rawString.len).ToString();
 
-            return builder.ToString();
+            NativeMethods.free_string_wrapper(rawString);
+
+            return str;
         }
+    }
+
+    public ReleaseType get_version_type(nuint index)
+    {
+        unsafe
+        {
+            check_manifest_internal();
+
+            return NativeMethods.get_type(_manifest, index);
+        }
+    }
+}
+
+internal class RustException : Exception
+{
+    public RustException(NativeReturn value)
+    {
+        
     }
 }

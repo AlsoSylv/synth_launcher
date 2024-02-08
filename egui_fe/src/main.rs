@@ -15,8 +15,11 @@ use std::sync::{atomic::Ordering, Arc};
 use std::time::SystemTime;
 
 use eframe::egui::panel::TopBottomSide::Bottom;
-use eframe::egui::{self, Align, Button, Color32, FontId, Frame, Image, Label, Layout, Margin, Pos2, Rect, Sense, Separator, Stroke, Ui, Vec2, Vec2b};
 use eframe::egui::style::Spacing;
+use eframe::egui::{
+    self, Align, Button, Color32, FontId, Frame, Image, Label, Layout, Margin, Pos2, Rect, Sense,
+    Stroke, Ui, Vec2, Vec2b,
+};
 use eframe::emath::RectTransform;
 use launcher_core::account::types::Account;
 use launcher_core::types::{Latest, Type, Version};
@@ -38,7 +41,7 @@ struct LauncherGui {
     // Async thread pool to handle futures
     rt: async_bridge::Runtime<Message, Response, State>,
     // receiver for messages sent before the event is finished
-    rx: async_channel::Receiver<EarlyMessage>,
+    rx: async_channel::Receiver<(String, String)>,
     // Reference to the async launcher
     launcher: Arc<AsyncLauncher>,
     // Minecraft Data
@@ -59,7 +62,7 @@ struct LauncherGui {
     adding_account: bool,
     adding_instance: bool,
     temp_instance: InstanceBuilder,
-    instances: Vec<Rc<EguiInstance>>,
+    instances: Vec<EguiInstance>,
     current_instance: Option<usize>,
     quick_playing: bool,
 }
@@ -193,21 +196,20 @@ impl LauncherGui {
     fn new(cc: &eframe::CreationContext) -> Box<Self> {
         let (config_dir, config) = check_file().unwrap();
 
-        let egui_instances: Vec<Rc<EguiInstance>> = config
+        let egui_instances = config
             .instances
             .iter()
-            .map(|instance| Rc::new(
+            .map(|instance| {
                 EguiInstance {
                     i_instance: instance.clone(),
-                    image: instance
-                        .image
-                        .as_ref()
-                        .map(|image| Image::from_uri(format!("file://{}", image.to_string_lossy()))),
+                    image: instance.image.as_ref().map(|image| {
+                        Image::from_uri(format!("file://{}", image.to_string_lossy()))
+                    }),
                     version_json: Cell::new(None),
                     launching: false.into(),
-                    prepared: false.into()
+                    prepared: false.into(),
                 }
-            ))
+            })
             .collect();
 
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -277,116 +279,91 @@ impl LauncherGui {
         }
     }
 
-    fn update_state(&mut self, _: &egui::Context) {
+    fn update_state(&mut self, _: &egui::Context) -> Result<(), Error> {
         let event = self.rt.try_recv();
         if let Ok(message) = event {
             match message {
-                Response::Versions(version) => match version {
-                    Ok(versions) => self.data.versions = Some(versions.into()),
-                    Err(err) => {
-                        dbg!("{}", &err);
-                        self.current_error = Some(err.into())
-                    }
-                },
-                Response::Version(version) => match version {
-                    Ok(json) => {
-                        let arc: Arc<VersionJson> = json.into();
-                        for instances in &mut self.instances {
-                            if instances.i_instance.version.id == arc.id {
-                                instances.version_json.set(Some(arc.clone()));
-                            }
+                Response::Versions(manifest) => {
+                    self.data.versions = Some(manifest?.into())
+                }
+                Response::Version(json) => {
+                    let arc: Arc<VersionJson> = json?.into();
+                    for instances in &mut self.instances {
+                        if instances.i_instance.version.id == arc.id {
+                            instances.version_json.set(Some(arc.clone()));
                         }
-                        self.data.version_json = Some(arc.clone())
-                    },
-                    Err(err) => {
-                        dbg!("{}", &err);
-                        self.current_error = Some(err.into())
                     }
-                },
-                Response::Auth(res) => match res {
-                    Ok((acc, refresh)) => {
-                        let into = AccRefreshPair {
-                            account: acc,
-                            refresh_token: refresh.into(),
-                        };
-                        for acc in &mut self.launcher_data.accounts {
-                            if acc.account.profile.id == into.account.profile.id {
-                                *acc = into;
-                                self.data_updated = true;
-                                return;
-                            }
+                    self.data.version_json = Some(arc.clone())
+                }
+                Response::Auth(res) => {
+                    let (acc, refresh) = res?;
+                    let into = AccRefreshPair {
+                        account: acc,
+                        refresh_token: refresh.into(),
+                    };
+                    for acc in &mut self.launcher_data.accounts {
+                        if acc.account.profile.id == into.account.profile.id {
+                            *acc = into;
+                            self.data_updated = true;
+                            return Ok(());
                         }
-                        self.launcher_data.accounts.push(into);
-                        self.adding_account = false;
-                        self.data_updated = true;
                     }
-                    Err(err) => {
-                        dbg!("{}", &err);
-                        self.current_error = Some(err.into())
-                    }
-                },
+                    self.launcher_data.accounts.push(into);
+                    self.adding_account = false;
+                    self.data_updated = true;
+                }
                 Response::Tagged(response, tag) => {
                     if let Some(versions) = &self.data.versions {
                         match response {
-                            TaggedResponse::Libraries(result) => match result {
-                                Ok(path) => {
-                                    if self.current_tag(versions) == &tag {
-                                        self.data.class_path = Some(path);
-                                    }
+                            TaggedResponse::Libraries(result) => {
+                                let path = result?;
+                                if self.current_tag(versions) == &tag {
+                                    self.data.class_path = Some(path);
                                 }
-                                Err(err) => self.current_error = Some(err.into()),
-                            },
-                            TaggedResponse::AssetIndex(idx) => match idx {
-                                Ok(json) => {
-                                    if self.current_tag(versions) == &tag {
-                                        let index = Arc::new(json);
+                            }
+                            TaggedResponse::AssetIndex(res) => {
+                                let json = res?;
+                                if self.current_tag(versions) == &tag {
+                                    let index = Arc::new(json);
 
-                                        let future = get_assets(
-                                            self.launcher.clone(),
-                                            index.clone(),
-                                            self.launcher_path.clone(),
-                                            self.data.total_assets.clone(),
-                                            self.data.finished_assets.clone(),
-                                            tag.clone(),
-                                        );
+                                    let future = get_assets(
+                                        self.launcher.clone(),
+                                        index.clone(),
+                                        self.launcher_path.clone(),
+                                        self.data.total_assets.clone(),
+                                        self.data.finished_assets.clone(),
+                                        tag.clone(),
+                                    );
 
-                                        self.rt.future(future);
+                                    self.rt.future(future);
 
-                                        self.data.asset_index = Some(index);
-                                    }
+                                    self.data.asset_index = Some(index);
                                 }
-                                Err(err) => self.current_error = Some(err.into()),
-                            },
-                            TaggedResponse::Asset(result) => match result {
-                                Ok(()) => {
-                                    if self.current_tag(versions) == &tag {
-                                        self.data.assets = true;
-                                    }
+                            }
+                            TaggedResponse::Asset(result) => {
+                                result?;
+                                if self.current_tag(versions) == &tag {
+                                    self.data.assets = true;
                                 }
-                                Err(err) => self.current_error = Some(err.into()),
-                            },
-                            TaggedResponse::Jar(res) => match res {
-                                Ok(jar) => {
-                                    if self.current_tag(versions) == &tag {
-                                        self.data.jar_path = Some(jar);
-                                    }
+                            }
+                            TaggedResponse::Jar(res) => {
+                                let jar = res?;
+                                if self.current_tag(versions) == &tag {
+                                    self.data.jar_path = Some(jar);
                                 }
-                                Err(err) => self.current_error = Some(err.into()),
-                            },
+                            }
                         }
                     }
                 }
             }
         }
 
-        if let Ok(val) = self.rx.try_recv() {
-            match val {
-                EarlyMessage::LinkCode((url, code)) => {
-                    self.player.code = Some(code);
-                    self.player.url = Some(url);
-                }
-            }
+        if let Ok((url, code)) = self.rx.try_recv() {
+            self.player.code = Some(code);
+            self.player.url = Some(url);
         }
+
+        Ok(())
     }
 
     fn prepare_launch(&self, json: &Arc<VersionJson>, manifest: &VersionManifestArc) {
@@ -554,7 +531,10 @@ fn send_message<R, M>(
 
 impl eframe::App for LauncherGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.update_state(ctx);
+        if let Err(e) = self.update_state(ctx) {
+            dbg!("{e}");
+            self.current_error = Some(e);
+        }
 
         if let Some(error) = &self.current_error {
             egui::Window::new("Help").auto_sized().show(ctx, |ui| {
@@ -820,10 +800,10 @@ impl eframe::App for LauncherGui {
                         image,
                         version_json: Cell::new(None),
                         launching: false.into(),
-                        prepared: false.into()
+                        prepared: false.into(),
                     };
 
-                    self.instances.push(Rc::new(egui_i));
+                    self.instances.push(egui_i);
                     self.adding_instance = false;
                     self.data_updated = true;
                 }
@@ -831,98 +811,110 @@ impl eframe::App for LauncherGui {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-                egui::ScrollArea::new(Vec2b { x: false, y: true })
-                    .show(ui, |ui| {
-                        let (response, _painter) = ui.allocate_painter(Vec2::new(ui.available_width(), ui.available_height()), Sense::hover());
-                        let to_screen = RectTransform::from_to(Rect::from_min_size(Pos2::ZERO, response.rect.size()), response.rect);
+            egui::ScrollArea::new(Vec2b { x: false, y: true }).show(ui, |ui| {
+                let (response, _painter) = ui.allocate_painter(
+                    Vec2::new(ui.available_width(), ui.available_height()),
+                    Sense::hover(),
+                );
+                let to_screen = RectTransform::from_to(
+                    Rect::from_min_size(Pos2::ZERO, response.rect.size()),
+                    response.rect,
+                );
 
-                        let mut max_idx = 0;
-                        let mut row = 0;
+                let mut max_idx = 0;
+                let mut row = 0;
 
-                        let len = ui.fonts(|fonts| {
-                            fonts.glyph_width(&FontId::default(), 'W') * 10.0
-                        });
+                let len = ui.fonts(|fonts| fonts.glyph_width(&FontId::default(), 'W') * 10.0);
 
-                        ui.style_mut().spacing = Spacing::default();
+                ui.style_mut().spacing = Spacing::default();
 
-                        for (idx, instances) in self.instances.iter().enumerate() {
-                            if ui.available_width() - len * (idx - max_idx) as f32 <= len {
-                                row += 1;
-                                max_idx = idx;
-                            }
+                for (idx, instances) in self.instances.iter().enumerate() {
+                    if ui.available_width() - len * (idx - max_idx) as f32 <= len {
+                        row += 1;
+                        max_idx = idx;
+                    }
 
-                            let mut clicked = false;
+                    let mut clicked = false;
 
-                            ui.put(
-                                Rect {
-                                    min: to_screen.transform_pos(Pos2 { x: 10.0 + len * (idx - max_idx) as f32, y: 0.0 + ( row * 100 ) as f32 }),
-                                    max: to_screen.transform_pos(Pos2 { x: 150.0 + len * (idx - max_idx) as f32, y: 100.0 + ( row * 100 ) as f32 })
-                                },
-                                |ui: &mut Ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(10.0);
-                                        ui.vertical(|ui| {
-                                            ui.style_mut().visuals.window_fill = Color32::WHITE;
+                    ui.put(
+                        Rect {
+                            min: to_screen.transform_pos(Pos2 {
+                                x: 10.0 + len * (idx - max_idx) as f32,
+                                y: 0.0 + (row * 100) as f32,
+                            }),
+                            max: to_screen.transform_pos(Pos2 {
+                                x: 150.0 + len * (idx - max_idx) as f32,
+                                y: 100.0 + (row * 100) as f32,
+                            }),
+                        },
+                        |ui: &mut Ui| {
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
+                                ui.vertical(|ui| {
+                                    ui.style_mut().visuals.window_fill = Color32::WHITE;
 
-                                            if let Some(image) = &instances.image {
-                                                ui.add(image.clone());
-                                            }
-                                            let label = Label::new(&instances.i_instance.name).truncate(true);
-                                            ui.add(label);
-                                            ui.label(&instances.i_instance.version.id);
-                                            ui.label(&instances.i_instance.jvm.name);
+                                    if let Some(image) = &instances.image {
+                                        ui.add(image.clone());
+                                    }
+                                    let label =
+                                        Label::new(&instances.i_instance.name).truncate(true);
+                                    ui.add(label);
+                                    ui.label(&instances.i_instance.version.id);
+                                    ui.label(&instances.i_instance.jvm.name);
 
-                                            let button = Button::new("Play");
+                                    let button = Button::new("Play");
 
+                                    if let Some(manifest) = &self.data.versions {
+                                        let enabled =
+                                            !self.data.launching && self.player.account.is_some();
 
-                                            if let Some(manifest) = &self.data.versions {
-                                                let enabled = !self.data.launching && self.player.account.is_some();
+                                        let res = ui.add_enabled(enabled, button);
 
-                                                let res = ui.add_enabled(enabled, button);
+                                        if res.clicked() {
+                                            let launcher = self.launcher.clone();
+                                            let version = instances.i_instance.version.clone();
+                                            let path = self.launcher_path.clone();
+                                            self.rt.future(get_version(launcher, version, path));
+                                            instances.launching.replace(true);
+                                            instances.prepared.replace(false);
+                                            clicked = true
+                                        }
 
-                                                if res.clicked() {
-                                                    let launcher = self.launcher.clone();
-                                                    let version = instances.i_instance.version.clone();
-                                                    let path = self.launcher_path.clone();
-                                                    self.rt.future(get_version(launcher, version, path));
-                                                    instances.launching.replace(true);
-                                                    instances.prepared.replace(false);
-                                                    clicked = true
-                                                }
-
-                                                if let Some(json) = instances.version_json.take() {
-                                                    if instances.launching.get() {
-                                                        if !instances.prepared.get() {
-                                                            self.prepare_launch(&json, manifest);
-                                                            instances.prepared.replace(true);
-                                                        }
-
-                                                        let maybe_launched = self.maybe_launch(&json, Some(&instances.i_instance.jvm), true);
-
-                                                        instances.launching.replace(maybe_launched);
-                                                    }
-
-                                                    instances.version_json.set(Some(json));
-                                                }
+                                        if let Some(json) = instances.version_json.take() {
+                                            if instances.launching.get() && !instances.prepared.get() {
+                                                self.prepare_launch(&json, manifest);
+                                                instances.prepared.replace(true);
                                             } else {
-                                                ui.add_enabled(false, button);
+                                                let maybe_launched = self.maybe_launch(
+                                                    &json,
+                                                    Some(&instances.i_instance.jvm),
+                                                    true,
+                                                );
+
+                                                instances.launching.replace(maybe_launched);
                                             }
-                                        });
 
-                                        ui.with_layout(Layout::right_to_left(Align::BOTTOM), |ui| {
-                                            ui.add(Separator::default().horizontal());
-                                            ui.separator();
-                                        });
-                                    }).response
-                                }
-                            );
+                                            instances.version_json.set(Some(json));
+                                        }
+                                    } else {
+                                        ui.add_enabled(false, button);
+                                    }
+                                });
 
-                            if clicked {
-                                self.current_instance = Some(idx);
-                                self.data.launching = true;
-                            }
-                        }
-                    });
+                                ui.with_layout(Layout::right_to_left(Align::BOTTOM), |ui| {
+                                    ui.separator();
+                                });
+                            })
+                            .response
+                        },
+                    );
+
+                    if clicked {
+                        self.current_instance = Some(idx);
+                        self.data.launching = true;
+                    }
+                }
+            });
         });
 
         if self.data.launching {

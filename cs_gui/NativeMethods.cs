@@ -16,21 +16,21 @@ namespace CsBindgen
 
 
 
-        [DllImport(__DllName, EntryPoint = "new_launcher", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern LauncherPointer* new_launcher();
-
         /// <summary># Safety No</summary>
         [DllImport(__DllName, EntryPoint = "get_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern TaskWrapper* get_version_manifest(LauncherPointer* launcher);
+        public static extern TaskWrapper* get_version_manifest();
 
         /// <summary># Safety No</summary>
         [DllImport(__DllName, EntryPoint = "poll_manifest_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.U1)]
         public static extern bool poll_manifest_task(TaskWrapper* task);
 
-        /// <summary># Safety No</summary>
+        [DllImport(__DllName, EntryPoint = "get_manifest_wrapper", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern ManifestWrapper* get_manifest_wrapper();
+
+        /// <summary># Safety The task wrapper cannot be null, otherwise this is UB</summary>
         [DllImport(__DllName, EntryPoint = "get_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern ManifestWrapper* get_manifest(TaskWrapper* task);
+        public static extern NativeReturn get_manifest(TaskWrapper* task, ManifestWrapper* manifest_wrapper);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "get_latest_release", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -44,12 +44,21 @@ namespace CsBindgen
         [DllImport(__DllName, EntryPoint = "get_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern StringWrapper get_name(ManifestWrapper* manifest, nuint index);
 
+        /// <summary># Safety The manifest wrapper cannot be null</summary>
+        [DllImport(__DllName, EntryPoint = "get_type", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern ReleaseType get_type(ManifestWrapper* manifest_wrapper, nuint index);
+
+        [DllImport(__DllName, EntryPoint = "free_string_wrapper", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void free_string_wrapper(StringWrapper string_wrapper);
+
 
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    internal unsafe partial struct LauncherPointer
+    internal unsafe partial struct NativeReturn
     {
+        public Code code;
+        public StringWrapper error;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -65,10 +74,26 @@ namespace CsBindgen
     [StructLayout(LayoutKind.Sequential)]
     internal unsafe partial struct StringWrapper
     {
-        public byte* char_ptr;
+        public ushort* char_ptr;
         public nuint len;
     }
 
+
+    internal enum Code : uint
+    {
+        Success,
+        RequestError,
+        IOError,
+        SerdeError,
+    }
+
+    internal enum ReleaseType : uint
+    {
+        OldAlpha,
+        OldBeta,
+        Release,
+        Snapshot,
+    }
 
 
 }
