@@ -2,8 +2,19 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:csGui="clr-namespace:cs_gui"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="cs_gui.MainWindow"
         Title="cs_gui">
-    Welcome to Avalonia!
+        <StackPanel>
+                <TextBlock>Welcome to Avalonia!</TextBlock>
+    
+                <ComboBox x:Name="VersionSelectBox">
+                        <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="{x:Type csGui:LibraryMemory}" >
+                                        <TextBlock Text="{Binding Span}"></TextBlock>
+                                </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                </ComboBox>
+        </StackPanel>
 </Window>

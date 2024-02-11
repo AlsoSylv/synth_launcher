@@ -1,11 +1,14 @@
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 
 namespace cs_gui;
 
-public partial class App : Application
+public class App : Application
 {
+    public Task ManifestTask = SafeNativeMethods.GetManifest();
+    
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);

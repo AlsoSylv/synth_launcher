@@ -1,10 +1,29 @@
 use std::path::Path;
-use std::ptr::{null, slice_from_raw_parts};
+use std::ptr::null;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 use launcher_core::{AsyncLauncher, Error};
 use launcher_core::types::VersionManifest;
+
+mod state {
+    use std::sync::Mutex;
+    use launcher_core::types::VersionManifest;
+
+    pub struct State {
+        pub version_manifest: Mutex<Option<VersionManifest>>
+    }
+
+    impl State {
+        const fn new() -> Self {
+            Self {
+                version_manifest: Mutex::new(None)
+            }
+        }
+    }
+
+    pub static STATE: State = State::new();
+}
 
 fn runtime() -> &'static Runtime {
     static LOCK: OnceLock<Runtime> = OnceLock::new();
@@ -20,10 +39,14 @@ fn launcher() -> &'static AsyncLauncher {
     )
 }
 
+fn state() -> &'static state::State {
+    &state::STATE
+}
+
 #[repr(C)]
 pub struct NativeReturn {
     code: Code,
-    error: StringWrapper
+    error: OwnedStringWrapper
 }
 
 #[repr(C)]
@@ -37,7 +60,7 @@ pub enum Code {
 impl From<Error> for NativeReturn {
     fn from(value: Error) -> Self {
         let code: Code;
-        let error: StringWrapper;
+        let error: OwnedStringWrapper;
 
         match value {
             Error::Reqwest(e) => {
@@ -80,36 +103,49 @@ impl From<launcher_core::types::Type> for ReleaseType {
     }
 }
 
-
-pub struct ManifestWrapper {
-    inner: Option<VersionManifest>
-}
-
 pub struct TaskWrapper<T> {
     inner: Option<JoinHandle<T>>
 }
 
 #[repr(C)]
-pub struct StringWrapper {
-    pub char_ptr: *const u16,
+pub struct RefStringWrapper {
+    pub char_ptr: *const u8,
     pub len: usize,
 }
 
-impl From<String> for StringWrapper {
-    fn from(value: String) -> Self {
-        let utf_16_buffer: Box<[u16]> = value.encode_utf16().collect();
-        let leaked = Box::leak(utf_16_buffer);
+#[repr(C)]
+pub struct OwnedStringWrapper {
+    pub char_ptr: *const u8,
+    pub len: usize,
+}
 
-        StringWrapper {
-            char_ptr: leaked.as_ptr(),
-            len: leaked.len()
+impl<'a> From<&'a str> for RefStringWrapper {
+    fn from(value: &'a str) -> Self {
+        RefStringWrapper {
+            char_ptr: value.as_ptr(),
+            len: value.len()
         }
     }
 }
 
-impl StringWrapper {
+impl<'a> From<&'a String> for RefStringWrapper {
+    fn from(value: &'a String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl From<String> for OwnedStringWrapper {
+    fn from(value: String) -> Self {
+        OwnedStringWrapper {
+            len: value.len(),
+            char_ptr: value.leak().as_ptr(),
+        }
+    }
+}
+
+impl OwnedStringWrapper {
     fn empty() -> Self {
-        StringWrapper {
+        OwnedStringWrapper {
             char_ptr: null(),
             len: 0,
         }
@@ -117,9 +153,14 @@ impl StringWrapper {
 }
 
 #[no_mangle]
+pub extern "C" fn is_manifest_null() -> bool {
+    state().version_manifest.lock().unwrap().is_none()
+}
+
+#[no_mangle]
 ///# Safety
 /// No
-pub unsafe extern "C" fn get_version_manifest() -> *mut TaskWrapper<Result<VersionManifest, launcher_core::Error>> {
+pub unsafe extern "C" fn get_version_manifest() -> *mut TaskWrapper<Result<VersionManifest, Error>> {
     let launcher = launcher();
     let rt = runtime();
     let task = rt.spawn(async {
@@ -139,24 +180,25 @@ pub unsafe extern "C" fn poll_manifest_task(task: *const TaskWrapper<VersionMani
 }
 
 #[no_mangle]
-pub extern "C" fn get_manifest_wrapper() -> *mut ManifestWrapper {
-    Box::leak(Box::new(ManifestWrapper {
-        inner: None
-    }))
-}
-
-#[no_mangle]
-///# Safety
-/// The task wrapper cannot be null, otherwise this is UB
-pub unsafe extern "C" fn get_manifest(task: *mut TaskWrapper<Result<VersionManifest, launcher_core::Error>>, manifest_wrapper: *mut ManifestWrapper) -> NativeReturn {
+/// This function consumes the task wrapper, dropping it, setting the manifest wrapper to a proper value
+/// And then return a NativeReturn, specifying if it's a success or error
+/// This is used to tell if this should be converted a C# exception
+///
+/// # Safety
+/// # The task wrapper cannot be Null
+/// # The manifest wrapper cannot be null
+pub unsafe extern "C" fn get_manifest(task: *mut TaskWrapper<Result<VersionManifest, Error>>) -> NativeReturn {
     let result = runtime().block_on((*task).inner.take().unwrap()).unwrap();
+    drop(Box::from_raw(task));
+
     match result {
         Ok(manifest) => {
-            (*manifest_wrapper).inner = Some(manifest);
-            drop(Box::from_raw(task));
+            let mut lock = state().version_manifest.lock().unwrap();
+            *lock = Some(manifest);
+            drop(lock);
             NativeReturn {
                 code: Code::Success,
-                error: StringWrapper::empty(),
+                error: OwnedStringWrapper::empty(),
             }
         }
         Err(e) => {
@@ -166,49 +208,41 @@ pub unsafe extern "C" fn get_manifest(task: *mut TaskWrapper<Result<VersionManif
 }
 
 #[no_mangle]
-///# Safety
-pub unsafe extern "C" fn get_latest_release(manifest: *const ManifestWrapper) -> StringWrapper {
-    let manifest = &(*manifest).inner;
+/// # Safety
+/// # Manifest Wrapper cannot equal null
+pub unsafe extern "C" fn get_latest_release() -> RefStringWrapper {
+    let manifest = state().version_manifest.lock().unwrap();
 
-    let utf_16_buffer: Box<[u16]> = manifest.as_ref().unwrap().latest.release.encode_utf16().collect();
-    let leaked = Box::leak(utf_16_buffer);
+    RefStringWrapper::from(&manifest.as_ref().unwrap().latest.release)
+}
 
-    StringWrapper {
-        char_ptr: leaked.as_ptr(),
-        len: leaked.len()
-    }
+#[no_mangle]
+/// # Safety
+/// # Manifest Wrapper cannot equal Null
+pub unsafe extern "C" fn get_name(index: usize) -> RefStringWrapper {
+    let manifest = state().version_manifest.lock().unwrap();
+
+    RefStringWrapper::from(&manifest.as_ref().unwrap().versions[index].id)
 }
 
 #[no_mangle]
 ///# Safety
-pub unsafe extern "C" fn get_manifest_len(manifest: *const ManifestWrapper) -> usize {
-    let manifest = &(*manifest).inner;
+pub unsafe extern "C" fn get_manifest_len() -> usize {
+    let manifest = state().version_manifest.lock().unwrap();
 
     manifest.as_ref().unwrap().versions.len()
 }
 
 #[no_mangle]
-///# Safety
-pub unsafe extern "C" fn get_name(manifest: *const ManifestWrapper, index: usize) -> StringWrapper {
-    let manifest = &(*manifest).inner;
-
-    let utf_16_buffer: Box<[u16]> = manifest.as_ref().unwrap().versions[index].id.encode_utf16().collect();
-    let leaked = Box::leak(utf_16_buffer);
-
-    StringWrapper {
-        char_ptr: leaked.as_ptr(),
-        len: leaked.len()
-    }
-}
-
-#[no_mangle]
 /// # Safety
 /// The manifest wrapper cannot be null
-pub unsafe extern "C" fn get_type(manifest_wrapper: *const ManifestWrapper, index: usize) -> ReleaseType {
-    (*manifest_wrapper).inner.as_ref().unwrap().versions[index].version_type.into()
+pub unsafe extern "C" fn get_type(index: usize) -> ReleaseType {
+    let manifest = state().version_manifest.lock().unwrap();
+
+    manifest.as_ref().unwrap().versions[index].version_type.into()
 }
 
 #[no_mangle]
-pub extern "C" fn free_string_wrapper(string_wrapper: StringWrapper) {
-    drop(Box::from(slice_from_raw_parts(string_wrapper.char_ptr, string_wrapper.len)));
+pub extern "C" fn free_string_wrapper(string_wrapper: OwnedStringWrapper) {
+    drop(Box::from(std::ptr::slice_from_raw_parts(string_wrapper.char_ptr, string_wrapper.len)));
 }

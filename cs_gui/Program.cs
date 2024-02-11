@@ -1,5 +1,6 @@
 ﻿using Avalonia;
 using System;
+using System.Text;
 using System.Threading.Tasks;
 using CsBindgen;
 
@@ -13,20 +14,9 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        var handle = new SafeNativeMethods();
-
-        var task = handle.get_manifest();
-
-        task.Wait();
+        Console.WriteLine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
         
-        Console.WriteLine(handle.get_latest_release());
-
-        for (nuint i = 0; i < handle.manifest_len(); i++)
-        {
-            Console.WriteLine(handle.get_version_id(i) + " " + handle.get_version_type(i));
-        } 
-
-        // BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 
     // Avalonia configuration, don't remove; also used by visual designer.
@@ -37,13 +27,29 @@ class Program
             .WithInterFont()
             .LogToTrace();
     }
+    
+    public static ReadOnlySpan<byte> CopyRefString(RefStringWrapper wrapper)
+    {
+        unsafe
+        {
+            return new ReadOnlySpan<byte>(wrapper.char_ptr, (int) wrapper.len);
+        }
+    }
+
+    public static string CopyAndFreeOwnedString(OwnedStringWrapper wrapper)
+    {
+        unsafe
+        {
+            var str = Encoding.UTF8.GetString(wrapper.char_ptr, (int) wrapper.len);
+            NativeMethods.free_string_wrapper(wrapper);
+            return str;
+        }
+    }
 }
 
-class SafeNativeMethods
+internal static class SafeNativeMethods
 {
-    private unsafe ManifestWrapper* _manifest = null;
-    
-    public Task get_manifest()
+    public static Task GetManifest()
     {
         return Task.Run(() =>
         {
@@ -55,95 +61,42 @@ class SafeNativeMethods
                     
                 }
 
-                var manifestPointer = NativeMethods.get_manifest_wrapper();
-                var value = NativeMethods.get_manifest(taskPointer, manifestPointer);
+                var value = NativeMethods.get_manifest(taskPointer);
 
-                switch (value.code)
+                if (value.code != Code.Success)
                 {
-                    case Code.Success:
-                    {
-                        _manifest = manifestPointer;
-                        break;
-                    }
+                    throw new RustException(value);
                 }
             }
         });
     }
 
-    public bool is_manifest_loaded()
+    public static bool IsManifestNull()
     {
-        unsafe
-        {
-            return _manifest != null;
-        }
+        return NativeMethods.is_manifest_null();
     }
 
-    public string get_latest_release()
+    public static ReadOnlySpan<byte> GetLatestRelease()
     {
-        unsafe
-        {
-            check_manifest_internal();
-            
-            var rawString = NativeMethods.get_latest_release(_manifest);
-            var str = new ReadOnlySpan<char>(rawString.char_ptr, (int) rawString.len).ToString();
-
-            NativeMethods.free_string_wrapper(rawString);
-
-            return str;
-        }
+        var rawString = NativeMethods.get_latest_release();
+        return Program.CopyRefString(rawString);
     }
 
-    private void check_manifest_internal()
+    public static nuint ManifestLength()
     {
-        unsafe
-        {
-            if (_manifest == null)
-            {
-                throw new NullReferenceException("The manifest was not loaded at the time this was called");
-            }
-        }
+        return NativeMethods.get_manifest_len();
     }
 
-    public nuint manifest_len()
+    public static ReadOnlySpan<byte> GetVersionId(nuint index)
     {
-        unsafe
-        {
-            check_manifest_internal();
-            
-            return NativeMethods.get_manifest_len(_manifest);
-        }
+        var rawString = NativeMethods.get_name(index);
+        return Program.CopyRefString(rawString);
     }
 
-    public string get_version_id(nuint index)
+    public static ReleaseType GetVersionType(nuint index)
     {
-        unsafe
-        {
-            check_manifest_internal();
-            
-            var rawString = NativeMethods.get_name(_manifest, index);
-            var str = new ReadOnlySpan<char>(rawString.char_ptr, (int) rawString.len).ToString();
-
-            NativeMethods.free_string_wrapper(rawString);
-
-            return str;
-        }
-    }
-
-    public ReleaseType get_version_type(nuint index)
-    {
-        unsafe
-        {
-            check_manifest_internal();
-
-            return NativeMethods.get_type(_manifest, index);
-        }
+        return NativeMethods.get_type(index);
     }
 }
 
-internal class RustException : Exception
-{
-    public RustException(NativeReturn value)
-    {
-        
-    }
-}
+internal class RustException(NativeReturn value) : Exception(value.code + " " + Program.CopyAndFreeOwnedString(value.error));

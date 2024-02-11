@@ -16,6 +16,10 @@ namespace CsBindgen
 
 
 
+        [DllImport(__DllName, EntryPoint = "is_manifest_null", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool is_manifest_null();
+
         /// <summary># Safety No</summary>
         [DllImport(__DllName, EntryPoint = "get_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern TaskWrapper* get_version_manifest();
@@ -25,31 +29,28 @@ namespace CsBindgen
         [return: MarshalAs(UnmanagedType.U1)]
         public static extern bool poll_manifest_task(TaskWrapper* task);
 
-        [DllImport(__DllName, EntryPoint = "get_manifest_wrapper", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern ManifestWrapper* get_manifest_wrapper();
-
-        /// <summary># Safety The task wrapper cannot be null, otherwise this is UB</summary>
+        /// <summary>This function consumes the task wrapper, dropping it, setting the manifest wrapper to a proper value And then return a NativeReturn, specifying if it's a success or error This is used to tell if this should be converted a C# exception  # Safety # The task wrapper cannot be Null # The manifest wrapper cannot be null</summary>
         [DllImport(__DllName, EntryPoint = "get_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern NativeReturn get_manifest(TaskWrapper* task, ManifestWrapper* manifest_wrapper);
+        public static extern NativeReturn get_manifest(TaskWrapper* task);
 
-        /// <summary># Safety</summary>
+        /// <summary># Safety # Manifest Wrapper cannot equal null</summary>
         [DllImport(__DllName, EntryPoint = "get_latest_release", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern StringWrapper get_latest_release(ManifestWrapper* manifest);
+        public static extern RefStringWrapper get_latest_release();
+
+        /// <summary># Safety # Manifest Wrapper cannot equal Null</summary>
+        [DllImport(__DllName, EntryPoint = "get_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern RefStringWrapper get_name(nuint index);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "get_manifest_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern nuint get_manifest_len(ManifestWrapper* manifest);
-
-        /// <summary># Safety</summary>
-        [DllImport(__DllName, EntryPoint = "get_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern StringWrapper get_name(ManifestWrapper* manifest, nuint index);
+        public static extern nuint get_manifest_len();
 
         /// <summary># Safety The manifest wrapper cannot be null</summary>
         [DllImport(__DllName, EntryPoint = "get_type", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern ReleaseType get_type(ManifestWrapper* manifest_wrapper, nuint index);
+        public static extern ReleaseType get_type(nuint index);
 
         [DllImport(__DllName, EntryPoint = "free_string_wrapper", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void free_string_wrapper(StringWrapper string_wrapper);
+        public static extern void free_string_wrapper(OwnedStringWrapper string_wrapper);
 
 
     }
@@ -58,12 +59,7 @@ namespace CsBindgen
     internal unsafe partial struct NativeReturn
     {
         public Code code;
-        public StringWrapper error;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    internal unsafe partial struct ManifestWrapper
-    {
+        public OwnedStringWrapper error;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -72,9 +68,16 @@ namespace CsBindgen
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    internal unsafe partial struct StringWrapper
+    internal unsafe partial struct RefStringWrapper
     {
-        public ushort* char_ptr;
+        public byte* char_ptr;
+        public nuint len;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct OwnedStringWrapper
+    {
+        public byte* char_ptr;
         public nuint len;
     }
 
