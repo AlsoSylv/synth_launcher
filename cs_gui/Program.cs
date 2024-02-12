@@ -14,7 +14,15 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        Console.WriteLine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+        unsafe
+        {
+            var path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+
+            fixed (char* ptr = path)
+            {
+                NativeMethods.init((ushort*) ptr, (nuint) path.Length);
+            }
+        }
         
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }

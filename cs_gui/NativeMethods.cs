@@ -16,11 +16,14 @@ namespace CsBindgen
 
 
 
+        /// <summary># Safety Path needs to be a valid UTF-16 Len must be the len of the vector length, not the char length</summary>
+        [DllImport(__DllName, EntryPoint = "init", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void init(ushort* path, nuint len);
+
         [DllImport(__DllName, EntryPoint = "is_manifest_null", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.U1)]
         public static extern bool is_manifest_null();
 
-        /// <summary># Safety No</summary>
         [DllImport(__DllName, EntryPoint = "get_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern TaskWrapper* get_version_manifest();
 
@@ -33,24 +36,23 @@ namespace CsBindgen
         [DllImport(__DllName, EntryPoint = "get_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern NativeReturn get_manifest(TaskWrapper* task);
 
-        /// <summary># Safety # Manifest Wrapper cannot equal null</summary>
         [DllImport(__DllName, EntryPoint = "get_latest_release", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern RefStringWrapper get_latest_release();
 
-        /// <summary># Safety # Manifest Wrapper cannot equal Null</summary>
         [DllImport(__DllName, EntryPoint = "get_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern RefStringWrapper get_name(nuint index);
 
-        /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "get_manifest_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern nuint get_manifest_len();
 
-        /// <summary># Safety The manifest wrapper cannot be null</summary>
         [DllImport(__DllName, EntryPoint = "get_type", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern ReleaseType get_type(nuint index);
 
         [DllImport(__DllName, EntryPoint = "free_string_wrapper", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern void free_string_wrapper(OwnedStringWrapper string_wrapper);
+
+        [DllImport(__DllName, EntryPoint = "get_version", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern TaskWrapper* get_version(nuint index);
 
 
     }

@@ -1,24 +1,35 @@
-use std::path::Path;
+use std::path::PathBuf;
 use std::ptr::null;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 use launcher_core::{AsyncLauncher, Error};
-use launcher_core::types::VersionManifest;
+use launcher_core::types::{VersionJson, VersionManifest};
 
 mod state {
-    use std::sync::Mutex;
-    use launcher_core::types::VersionManifest;
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+    use launcher_core::types::{VersionJson, VersionManifest};
 
     pub struct State {
-        pub version_manifest: Mutex<Option<VersionManifest>>
+        pub version_manifest: OnceLock<tokio::sync::RwLock<Option<VersionManifest>>>,
+        pub selected_version: OnceLock<tokio::sync::RwLock<Option<VersionJson>>>,
+        pub path: OnceLock<PathBuf>,
     }
 
     impl State {
         const fn new() -> Self {
             Self {
-                version_manifest: Mutex::new(None)
+                version_manifest: OnceLock::new(),
+                selected_version: OnceLock::new(),
+                path: OnceLock::new(),
             }
+        }
+
+        pub fn init(&self, path_buf: PathBuf) {
+            self.path.get_or_init(|| path_buf);
+            self.selected_version.get_or_init(|| tokio::sync::RwLock::new(None));
+            self.version_manifest.get_or_init(|| tokio::sync::RwLock::new(None));
         }
     }
 
@@ -153,18 +164,26 @@ impl OwnedStringWrapper {
 }
 
 #[no_mangle]
+/// # Safety
+/// Path needs to be a valid UTF-16
+/// Len must be the len of the vector length, not the char length
+pub unsafe extern "C" fn init(path: *const u16, len: usize) {
+    let path = String::from_utf16(&*std::ptr::slice_from_raw_parts(path, len)).unwrap();
+    state().init(PathBuf::from(path).join("synth_launcher"));
+}
+
+
+#[no_mangle]
 pub extern "C" fn is_manifest_null() -> bool {
-    state().version_manifest.lock().unwrap().is_none()
+    state().version_manifest.get().unwrap().blocking_read().is_none()
 }
 
 #[no_mangle]
-///# Safety
-/// No
-pub unsafe extern "C" fn get_version_manifest() -> *mut TaskWrapper<Result<VersionManifest, Error>> {
+pub extern "C" fn get_version_manifest() -> *mut TaskWrapper<Result<VersionManifest, Error>> {
     let launcher = launcher();
     let rt = runtime();
     let task = rt.spawn(async {
-        launcher.get_version_manifest(Path::new("./")).await
+        launcher.get_version_manifest(&state().path.get().unwrap().join("versions")).await
     });
 
     Box::leak(Box::new(TaskWrapper {
@@ -193,7 +212,7 @@ pub unsafe extern "C" fn get_manifest(task: *mut TaskWrapper<Result<VersionManif
 
     match result {
         Ok(manifest) => {
-            let mut lock = state().version_manifest.lock().unwrap();
+            let mut lock = state().version_manifest.get().unwrap().blocking_write();
             *lock = Some(manifest);
             drop(lock);
             NativeReturn {
@@ -208,36 +227,29 @@ pub unsafe extern "C" fn get_manifest(task: *mut TaskWrapper<Result<VersionManif
 }
 
 #[no_mangle]
-/// # Safety
-/// # Manifest Wrapper cannot equal null
-pub unsafe extern "C" fn get_latest_release() -> RefStringWrapper {
-    let manifest = state().version_manifest.lock().unwrap();
+pub extern "C" fn get_latest_release() -> RefStringWrapper {
+    let manifest = state().version_manifest.get().unwrap().blocking_read();
 
     RefStringWrapper::from(&manifest.as_ref().unwrap().latest.release)
 }
 
 #[no_mangle]
-/// # Safety
-/// # Manifest Wrapper cannot equal Null
-pub unsafe extern "C" fn get_name(index: usize) -> RefStringWrapper {
-    let manifest = state().version_manifest.lock().unwrap();
+pub extern "C" fn get_name(index: usize) -> RefStringWrapper {
+    let manifest = state().version_manifest.get().unwrap().blocking_read();
 
     RefStringWrapper::from(&manifest.as_ref().unwrap().versions[index].id)
 }
 
 #[no_mangle]
-///# Safety
-pub unsafe extern "C" fn get_manifest_len() -> usize {
-    let manifest = state().version_manifest.lock().unwrap();
+pub extern "C" fn get_manifest_len() -> usize {
+    let manifest = state().version_manifest.get().unwrap().blocking_read();
 
     manifest.as_ref().unwrap().versions.len()
 }
 
 #[no_mangle]
-/// # Safety
-/// The manifest wrapper cannot be null
-pub unsafe extern "C" fn get_type(index: usize) -> ReleaseType {
-    let manifest = state().version_manifest.lock().unwrap();
+pub extern "C" fn get_type(index: usize) -> ReleaseType {
+    let manifest = state().version_manifest.get().unwrap().blocking_read();
 
     manifest.as_ref().unwrap().versions[index].version_type.into()
 }
@@ -245,4 +257,21 @@ pub unsafe extern "C" fn get_type(index: usize) -> ReleaseType {
 #[no_mangle]
 pub extern "C" fn free_string_wrapper(string_wrapper: OwnedStringWrapper) {
     drop(Box::from(std::ptr::slice_from_raw_parts(string_wrapper.char_ptr, string_wrapper.len)));
+}
+
+#[no_mangle]
+pub extern "C" fn get_version(index: usize) -> *mut TaskWrapper<Result<VersionJson, Error>> {
+    let task = runtime().spawn(async move {
+        let manifest = state().version_manifest.get().unwrap().blocking_read();
+        if let Some(manifest) = &*manifest {
+            let version = &manifest.versions[index];
+            launcher().get_version_json(version, &state().path.get().unwrap().join("versions")).await
+        } else {
+            panic!("Guh")
+        }
+    });
+
+    Box::leak(Box::new(TaskWrapper {
+        inner: Some(task)
+    }))
 }
