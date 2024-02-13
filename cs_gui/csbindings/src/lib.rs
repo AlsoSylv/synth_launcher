@@ -1,19 +1,20 @@
+use launcher_core::types::{AssetIndexJson, VersionJson, VersionManifest};
+use launcher_core::{AsyncLauncher, Error};
 use std::path::PathBuf;
 use std::ptr::null;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
-use launcher_core::{AsyncLauncher, Error};
-use launcher_core::types::{VersionJson, VersionManifest};
 
 mod state {
+    use launcher_core::types::{AssetIndexJson, VersionJson, VersionManifest};
     use std::path::PathBuf;
     use std::sync::OnceLock;
-    use launcher_core::types::{VersionJson, VersionManifest};
 
     pub struct State {
         pub version_manifest: OnceLock<tokio::sync::RwLock<Option<VersionManifest>>>,
         pub selected_version: OnceLock<tokio::sync::RwLock<Option<VersionJson>>>,
+        pub asset_index: OnceLock<tokio::sync::RwLock<Option<AssetIndexJson>>>,
         pub path: OnceLock<PathBuf>,
     }
 
@@ -22,15 +23,21 @@ mod state {
             Self {
                 version_manifest: OnceLock::new(),
                 selected_version: OnceLock::new(),
+                asset_index: OnceLock::new(),
                 path: OnceLock::new(),
             }
         }
 
         pub fn init(&self, path_buf: PathBuf) {
             self.path.get_or_init(|| path_buf);
-            self.selected_version.get_or_init(|| tokio::sync::RwLock::new(None));
-            self.version_manifest.get_or_init(|| tokio::sync::RwLock::new(None));
+            self.selected_version.get_or_init(empty_lock);
+            self.version_manifest.get_or_init(empty_lock);
+            self.asset_index.get_or_init(empty_lock);
         }
+    }
+
+    fn empty_lock<T>() -> tokio::sync::RwLock<Option<T>> {
+        tokio::sync::RwLock::new(None)
     }
 
     pub static STATE: State = State::new();
@@ -38,16 +45,12 @@ mod state {
 
 fn runtime() -> &'static Runtime {
     static LOCK: OnceLock<Runtime> = OnceLock::new();
-    LOCK.get_or_init(|| {
-        Runtime::new().unwrap()
-    })
+    LOCK.get_or_init(|| Runtime::new().unwrap())
 }
 
 fn launcher() -> &'static AsyncLauncher {
-    static LOCK:OnceLock<AsyncLauncher> = OnceLock::new();
-    LOCK.get_or_init(||
-        AsyncLauncher::new(reqwest::Client::new())
-    )
+    static LOCK: OnceLock<AsyncLauncher> = OnceLock::new();
+    LOCK.get_or_init(|| AsyncLauncher::new(reqwest::Client::new()))
 }
 
 fn state() -> &'static state::State {
@@ -57,7 +60,16 @@ fn state() -> &'static state::State {
 #[repr(C)]
 pub struct NativeReturn {
     code: Code,
-    error: OwnedStringWrapper
+    error: OwnedStringWrapper,
+}
+
+impl NativeReturn {
+    fn success() -> Self {
+        Self {
+            code: Code::Success,
+            error: OwnedStringWrapper::empty(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -88,10 +100,7 @@ impl From<Error> for NativeReturn {
             }
         }
 
-        Self {
-            code,
-            error,
-        }
+        Self { code, error }
     }
 }
 
@@ -106,16 +115,16 @@ pub enum ReleaseType {
 impl From<launcher_core::types::Type> for ReleaseType {
     fn from(value: launcher_core::types::Type) -> Self {
         match value {
-            launcher_core::types::Type::OldAlpha => { ReleaseType::OldAlpha }
-            launcher_core::types::Type::OldBeta => { ReleaseType::OldBeta }
-            launcher_core::types::Type::Release => { ReleaseType::Release }
-            launcher_core::types::Type::Snapshot => { ReleaseType::Snapshot }
+            launcher_core::types::Type::OldAlpha => ReleaseType::OldAlpha,
+            launcher_core::types::Type::OldBeta => ReleaseType::OldBeta,
+            launcher_core::types::Type::Release => ReleaseType::Release,
+            launcher_core::types::Type::Snapshot => ReleaseType::Snapshot,
         }
     }
 }
 
 pub struct TaskWrapper<T> {
-    inner: Option<JoinHandle<T>>
+    inner: Option<JoinHandle<T>>,
 }
 
 #[repr(C)]
@@ -134,7 +143,7 @@ impl<'a> From<&'a str> for RefStringWrapper {
     fn from(value: &'a str) -> Self {
         RefStringWrapper {
             char_ptr: value.as_ptr(),
-            len: value.len()
+            len: value.len(),
         }
     }
 }
@@ -167,15 +176,19 @@ impl OwnedStringWrapper {
 /// # Safety
 /// Path needs to be a valid UTF-16
 /// Len must be the len of the vector length, not the char length
-pub unsafe extern "C" fn init(path: *const u16, len: usize) {
-    let path = String::from_utf16(&*std::ptr::slice_from_raw_parts(path, len)).unwrap();
+pub extern "C" fn init(path: *const u16, len: usize) {
+    let path = String::from_utf16(unsafe { std::slice::from_raw_parts(path, len) }).unwrap();
     state().init(PathBuf::from(path).join("synth_launcher"));
 }
 
-
 #[no_mangle]
 pub extern "C" fn is_manifest_null() -> bool {
-    state().version_manifest.get().unwrap().blocking_read().is_none()
+    state()
+        .version_manifest
+        .get()
+        .unwrap()
+        .blocking_read()
+        .is_none()
 }
 
 #[no_mangle]
@@ -183,19 +196,27 @@ pub extern "C" fn get_version_manifest() -> *mut TaskWrapper<Result<VersionManif
     let launcher = launcher();
     let rt = runtime();
     let task = rt.spawn(async {
-        launcher.get_version_manifest(&state().path.get().unwrap().join("versions")).await
+        launcher
+            .get_version_manifest(&state().path.get().unwrap().join("versions"))
+            .await
     });
 
-    Box::leak(Box::new(TaskWrapper {
-        inner: Some(task)
-    }))
+    Box::leak(Box::new(TaskWrapper { inner: Some(task) }))
 }
 
 #[no_mangle]
 ///# Safety
 /// No
-pub unsafe extern "C" fn poll_manifest_task(task: *const TaskWrapper<VersionManifest>) -> bool {
-    (*task).inner.as_ref().unwrap().is_finished()
+pub extern "C" fn poll_manifest_task(task: *const TaskWrapper<VersionManifest>) -> bool {
+    // SAFETY
+    // This pointer comes from C#, and is confirmed the correct value
+    unsafe {
+        if let Some(task) = task.as_ref() {
+            task.inner.as_ref().unwrap().is_finished()
+        } else {
+            panic!("Null Pointer exception")
+        }
+    }
 }
 
 #[no_mangle]
@@ -206,7 +227,9 @@ pub unsafe extern "C" fn poll_manifest_task(task: *const TaskWrapper<VersionMani
 /// # Safety
 /// # The task wrapper cannot be Null
 /// # The manifest wrapper cannot be null
-pub unsafe extern "C" fn get_manifest(task: *mut TaskWrapper<Result<VersionManifest, Error>>) -> NativeReturn {
+pub unsafe extern "C" fn get_manifest(
+    task: *mut TaskWrapper<Result<VersionManifest, Error>>,
+) -> NativeReturn {
     let result = runtime().block_on((*task).inner.take().unwrap()).unwrap();
     drop(Box::from_raw(task));
 
@@ -215,14 +238,9 @@ pub unsafe extern "C" fn get_manifest(task: *mut TaskWrapper<Result<VersionManif
             let mut lock = state().version_manifest.get().unwrap().blocking_write();
             *lock = Some(manifest);
             drop(lock);
-            NativeReturn {
-                code: Code::Success,
-                error: OwnedStringWrapper::empty(),
-            }
+            NativeReturn::success()
         }
-        Err(e) => {
-            e.into()
-        }
+        Err(e) => e.into(),
     }
 }
 
@@ -251,27 +269,136 @@ pub extern "C" fn get_manifest_len() -> usize {
 pub extern "C" fn get_type(index: usize) -> ReleaseType {
     let manifest = state().version_manifest.get().unwrap().blocking_read();
 
-    manifest.as_ref().unwrap().versions[index].version_type.into()
+    manifest.as_ref().unwrap().versions[index]
+        .version_type
+        .into()
 }
 
 #[no_mangle]
 pub extern "C" fn free_string_wrapper(string_wrapper: OwnedStringWrapper) {
-    drop(Box::from(std::ptr::slice_from_raw_parts(string_wrapper.char_ptr, string_wrapper.len)));
+    drop(Box::from(std::ptr::slice_from_raw_parts(
+        string_wrapper.char_ptr,
+        string_wrapper.len,
+    )));
 }
 
 #[no_mangle]
 pub extern "C" fn get_version(index: usize) -> *mut TaskWrapper<Result<VersionJson, Error>> {
     let task = runtime().spawn(async move {
-        let manifest = state().version_manifest.get().unwrap().blocking_read();
+        let manifest = state().version_manifest.get().unwrap().read().await;
         if let Some(manifest) = &*manifest {
             let version = &manifest.versions[index];
-            launcher().get_version_json(version, &state().path.get().unwrap().join("versions")).await
+            launcher()
+                .get_version_json(version, &state().path.get().unwrap().join("versions"))
+                .await
         } else {
             panic!("Guh")
         }
     });
 
-    Box::leak(Box::new(TaskWrapper {
-        inner: Some(task)
-    }))
+    Box::leak(Box::new(TaskWrapper { inner: Some(task) }))
+}
+
+#[no_mangle]
+pub extern "C" fn is_version_task_finished(
+    task: *mut TaskWrapper<Result<VersionJson, Error>>,
+) -> bool {
+    let task = unsafe { task.as_ref() };
+    if let Some(task) = task {
+        task.inner.as_ref().unwrap().is_finished()
+    } else {
+        panic!("Null Pointer Exception")
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn await_version_task(
+    raw_task: *mut TaskWrapper<Result<VersionJson, Error>>,
+) -> NativeReturn {
+    let task = unsafe { raw_task.as_mut() };
+
+    if let Some(task) = task {
+        let version = runtime().block_on(task.inner.take().unwrap()).unwrap();
+        unsafe { drop(Box::from_raw(raw_task)) }
+        match version {
+            Ok(version) => {
+                let mut writer = state().selected_version.get().unwrap().blocking_write();
+                *writer = Some(version);
+                drop(writer);
+                NativeReturn::success()
+            }
+            Err(e) => e.into(),
+        }
+    } else {
+        panic!("Null Pointer Exception")
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_asset_index() -> *mut TaskWrapper<Result<AssetIndexJson, Error>> {
+    if let Some(version) = state().selected_version.get() {
+        let launcher = launcher();
+        let task = runtime().spawn(async move {
+            let path = state().path.get().unwrap();
+            let tmp = version.read().await;
+            let version = tmp.as_ref().unwrap();
+            launcher.get_asset_index_json(&version.asset_index, path).await
+        });
+
+        Box::leak(Box::new(TaskWrapper {
+            inner: Some(task)
+        }))
+    } else {
+        panic!("Null Pointer Exception");
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn poll_asset_index(task_wrapper: *mut TaskWrapper<Result<AssetIndexJson, Error>>) -> bool {
+    let task_ref = unsafe { task_wrapper.as_ref() };
+    if let Some(task) = task_ref {
+        task.inner.as_ref().unwrap().is_finished()
+    } else {
+        panic!("Null Pointer Exception");
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn await_asset_index(task_wrapper: *mut TaskWrapper<Result<AssetIndexJson, Error>>) -> NativeReturn {
+    let task = unsafe { task_wrapper.as_mut() };
+
+    if let Some(task) = task {
+        let version = runtime().block_on(task.inner.take().unwrap()).unwrap();
+        unsafe { drop(Box::from_raw(task_wrapper)) }
+        match version {
+            Ok(version) => {
+                let mut writer = state().asset_index.get().unwrap().blocking_write();
+                *writer = Some(version);
+                drop(writer);
+                NativeReturn::success()
+            }
+            Err(e) => e.into(),
+        }
+    } else {
+        panic!("Null Pointer Exception")
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn cancel_asset_index(task_wrapper: *mut TaskWrapper<Result<AssetIndexJson, Error>>) {
+    if task_wrapper.is_null() {
+        panic!("Null Pointer Exception")
+    }
+    unsafe { (*task_wrapper).inner.take().unwrap().abort() }
+    unsafe { drop(Box::from_raw(task_wrapper)) }
+}
+
+#[no_mangle]
+/// This will drop a version task regardless of completion, this is only used when cancelling
+pub extern "C" fn cleanup_version_task(raw_task: *mut TaskWrapper<Result<VersionJson, Error>>) {
+    if raw_task.is_null() {
+        panic!("Null Pointer Exception")
+    }
+    unsafe { (*raw_task).inner.take().unwrap().abort() }
+    unsafe { drop(Box::from_raw(raw_task)) }
 }

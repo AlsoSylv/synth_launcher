@@ -9,10 +9,10 @@
         <StackPanel>
                 <TextBlock>Welcome to Avalonia!</TextBlock>
     
-                <ComboBox x:Name="VersionSelectBox">
+                <ComboBox x:Name="VersionSelectBox" SelectionChanged="VersionSelectBox_OnSelectionChanged">
                         <ComboBox.ItemTemplate>
-                                <DataTemplate x:DataType="{x:Type csGui:LibraryMemory}" >
-                                        <TextBlock Text="{Binding Span}"></TextBlock>
+                                <DataTemplate x:DataType="x:String">
+                                        <TextBlock Text="{Binding}"></TextBlock>
                                 </DataTemplate>
                         </ComboBox.ItemTemplate>
                 </ComboBox>

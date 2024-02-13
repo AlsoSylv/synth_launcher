@@ -17,9 +17,9 @@ reqwest = { version = "0.11", features = ["json", "stream"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 sha1_smol = "1.0.0"
 serde_json = { version = "1.0" }
-tokio = { version = "1.33", features = ["rt-multi-thread"], default-features = false }
-async-channel = "2.0.0"
-eframe = "0.26.0"
+tokio = { version = "1.36", features = ["rt-multi-thread"], default-features = false }
+async-channel = "2.2.0"
+eframe = "0.26"
 launcher_core = { path = "./launcher_core" }
 async_bridge = { path = "./egui_fe/async_bridge" }
 

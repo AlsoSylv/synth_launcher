@@ -54,6 +54,30 @@ namespace CsBindgen
         [DllImport(__DllName, EntryPoint = "get_version", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern TaskWrapper* get_version(nuint index);
 
+        [DllImport(__DllName, EntryPoint = "is_version_task_finished", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool is_version_task_finished(TaskWrapper* task);
+
+        [DllImport(__DllName, EntryPoint = "await_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern NativeReturn await_version_task(TaskWrapper* raw_task);
+
+        [DllImport(__DllName, EntryPoint = "get_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern TaskWrapper* get_asset_index();
+
+        [DllImport(__DllName, EntryPoint = "poll_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool poll_asset_index(TaskWrapper* task_wrapper);
+
+        [DllImport(__DllName, EntryPoint = "await_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern NativeReturn await_asset_index(TaskWrapper* task_wrapper);
+
+        [DllImport(__DllName, EntryPoint = "cancel_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void cancel_asset_index(TaskWrapper* task_wrapper);
+
+        /// <summary>This will drop a version task regardless of completion, this is only used when cancelling</summary>
+        [DllImport(__DllName, EntryPoint = "cleanup_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void cleanup_version_task(TaskWrapper* raw_task);
+
 
     }
 
