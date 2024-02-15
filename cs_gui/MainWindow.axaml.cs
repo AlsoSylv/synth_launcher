@@ -1,15 +1,18 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 
 namespace cs_gui;
 
 public partial class MainWindow : Window {
     private Task? _versionTask;
     private readonly CancellationTokenSource _token = new();
+    private static UserCodeWindow? _userCodeWindow;
 
     public MainWindow() {
         InitializeComponent();
@@ -37,6 +40,11 @@ public partial class MainWindow : Window {
         }
     }
 
+    public static void CloseUserCodeWindow() {
+        Debug.Assert(_userCodeWindow != null, nameof(_userCodeWindow) + " != null");
+        _userCodeWindow.Close();
+    }
+
     private async void VersionSelectBox_OnSelectionChanged(object? _, SelectionChangedEventArgs e) {
         if (_versionTask == null) {
             var index = VersionSelectBox.SelectedIndex;
@@ -49,5 +57,14 @@ public partial class MainWindow : Window {
             var index = VersionSelectBox.SelectedIndex;
             _versionTask = SafeNativeMethods.GetVersion((nuint)index, _token.Token);
         }
+    }
+
+    private async void Button_OnClick(object? sender, RoutedEventArgs e) {
+        await SafeNativeMethods.GetDeviceResponse;
+        var window = new UserCodeWindow(SafeNativeMethods.GetCode(), SafeNativeMethods.GetUrl());
+        
+        window.Show();
+
+        _userCodeWindow = window;
     }
 }

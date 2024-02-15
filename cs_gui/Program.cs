@@ -41,7 +41,7 @@ internal static class Program {
     public static string CopyAndFreeOwnedString(OwnedStringWrapper wrapper) {
         unsafe {
             var str = Encoding.UTF8.GetString(wrapper.char_ptr, (int)wrapper.len);
-            NativeMethods.free_string_wrapper(wrapper);
+            NativeMethods.free_owned_string_wrapper(wrapper);
             return str;
         }
     }
@@ -54,7 +54,7 @@ internal static class SafeNativeMethods {
                 var taskPointer = NativeMethods.get_version_manifest();
                 while (!NativeMethods.poll_manifest_task(taskPointer)) { }
 
-                var value = NativeMethods.get_manifest(taskPointer);
+                var value = NativeMethods.await_version_manifest(taskPointer);
 
                 if (value.code != Code.Success) {
                     throw new RustException(value);
@@ -76,10 +76,10 @@ internal static class SafeNativeMethods {
         Task.Run(() => {
             unsafe {
                 token.ThrowIfCancellationRequested();
-                var versionTaskPointer = NativeMethods.get_version(index);
-                while (!NativeMethods.is_version_task_finished(versionTaskPointer)) {
+                var versionTaskPointer = NativeMethods.get_version_task(index);
+                while (!NativeMethods.poll_version_task(versionTaskPointer)) {
                     if (!token.IsCancellationRequested) continue;
-                    NativeMethods.cleanup_version_task(versionTaskPointer);
+                    NativeMethods.cancel_version_task(versionTaskPointer);
                     token.ThrowIfCancellationRequested();
                 }
 
@@ -99,6 +99,40 @@ internal static class SafeNativeMethods {
                 if (v.code != Code.Success) throw new RustException(v);
             }
         }, token);
+    
+    public static Task Auth() =>
+        Task.Run(() => {
+            unsafe {
+                var taskPointer = NativeMethods.start_auth_loop();
+                while (!NativeMethods.poll_auth_loop(taskPointer)) {
+                    Task.Delay(100); 
+                }
+
+                var value = NativeMethods.await_auth_loop(taskPointer);
+
+                if (value.code != Code.Success) {
+                    throw new RustException(value);
+                }
+            }
+        });
+
+    public static Task GetDeviceResponse => Task.Run(() => {
+        unsafe {
+            var responseTask = NativeMethods.get_device_response();
+            while (!NativeMethods.poll_device_response(responseTask)) { }
+
+            var response = NativeMethods.await_device_response(responseTask);
+            if (response.code != Code.Success) throw new RustException(response);
+        }
+    });
+
+    public static string GetCode() {
+        return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_user_code()));
+    }
+    
+    public static string GetUrl() {
+        return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_url()));
+    }
 }
 
 internal class RustException(NativeReturn value)

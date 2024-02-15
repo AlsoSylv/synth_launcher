@@ -1,6 +1,6 @@
-use std::ops::Deref;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::skip_serializing_none;
+use std::ops::Deref;
 use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,10 +53,10 @@ impl Deref for Type {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Type::OldAlpha => { "old_alpha" }
-            Type::OldBeta => { "old_beta" }
-            Type::Release => { "release" }
-            Type::Snapshot => { "snapshot" }
+            Type::OldAlpha => "old_alpha",
+            Type::OldBeta => "old_beta",
+            Type::Release => "release",
+            Type::Snapshot => "snapshot",
         }
     }
 }
@@ -195,7 +195,10 @@ impl<'de> Deserialize<'de> for Library {
 
             rules.remove(idx)
         } else {
-            Rule { action: Action::Allow, os: None }
+            Rule {
+                action: Action::Allow,
+                os: None,
+            }
         };
 
         let artifact = if let Some(mut classifier) = t.downloads.classifiers.take() {
@@ -219,7 +222,10 @@ impl<'de> Deserialize<'de> for Library {
 
         if let Some(natives) = &t.natives {
             if natives.applies() && rule.os.is_none() {
-                rule.os = Some(Os { name: OS, version: None });
+                rule.os = Some(Os {
+                    name: OS,
+                    version: None,
+                });
             }
         }
 
@@ -428,15 +434,15 @@ impl<'de> Deserialize<'de> for Arguments {
                     .collect();
 
                 t.game.iter().for_each(|g| {
-                   if let GameElement::GameClass(g) = &g {
-                       if let Some(r) = &g.rules {
-                           for x in r {
-                               if x.action == Action::Disallow {
-                                   panic!()
-                               }
-                           }
-                       }
-                   }
+                    if let GameElement::GameClass(g) = &g {
+                        if let Some(r) = &g.rules {
+                            for x in r {
+                                if x.action == Action::Disallow {
+                                    panic!()
+                                }
+                            }
+                        }
+                    }
                 });
 
                 Arguments { jvm, game: t.game }

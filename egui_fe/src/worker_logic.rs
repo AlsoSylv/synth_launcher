@@ -78,9 +78,7 @@ async fn auth_or_refresh(
         let code = device_response.user_code;
         let ms_url = device_response.verification_uri;
 
-        tx.send((ms_url, code))
-            .await
-            .unwrap();
+        tx.send((ms_url, code)).await.unwrap();
 
         loop {
             let device_code = &device_response.device_code;

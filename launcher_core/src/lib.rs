@@ -248,7 +248,10 @@ impl AsyncLauncher {
                         finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
                         return Ok(());
                     } else {
-                        println!("Hash was wrong, expected: {}, but found: {hash}", asset.hash);
+                        println!(
+                            "Hash was wrong, expected: {}, but found: {hash}",
+                            asset.hash
+                        );
                         tokio::fs::remove_file(&file_path).await?;
                     }
                 } else if !dir_path.exists() {
@@ -338,7 +341,8 @@ impl AsyncLauncher {
             } else {
                 Ok(())
             }
-        }).await?;
+        })
+        .await?;
 
         Ok(path)
     }
@@ -383,7 +387,14 @@ impl AsyncLauncher {
     }
 }
 
-async fn write_file<S>(file: &mut tokio::fs::File, stream: &mut S, bytes: &AtomicU64) -> Result<(), Error> where S: Stream<Item=reqwest::Result<bytes::Bytes>> + Unpin {
+async fn write_file<S>(
+    file: &mut tokio::fs::File,
+    stream: &mut S,
+    bytes: &AtomicU64,
+) -> Result<(), Error>
+where
+    S: Stream<Item = reqwest::Result<bytes::Bytes>> + Unpin,
+{
     while let Some(next) = stream.next().await {
         let chunk = next?;
         file.write_all(&chunk).await?;
@@ -408,11 +419,11 @@ async fn extract_native(native_dir: &Path, path: &Path) -> Result<(), Error> {
         let file_path = entry.filename().as_str().unwrap();
 
         #[cfg(windows)]
-            let ends_with = ".dll";
+        let ends_with = ".dll";
         #[cfg(target_os = "linux")]
-            let ends_with = ".so";
+        let ends_with = ".so";
         #[cfg(target_os = "macos")]
-            let ends_with = ".dylib";
+        let ends_with = ".dylib";
 
         if !file_path.ends_with(ends_with) {
             continue;

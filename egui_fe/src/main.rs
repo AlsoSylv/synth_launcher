@@ -34,7 +34,6 @@ use instances::*;
 
 // TODO: Store encrypted auth token for reuse: Use Keyring crate
 // TODO: Document existing UI functionality: In-Progress
-// TODO: Make instances, must be savable to disk, maybe using RON?: Json Format
 // TODO: Redo error handling, fields that can error should hold Result<T, E>
 // UPDATE: We could also add a tag to the error? Not sure. Constant Error checking would suck.
 struct LauncherGui {
@@ -199,16 +198,15 @@ impl LauncherGui {
         let egui_instances = config
             .instances
             .iter()
-            .map(|instance| {
-                EguiInstance {
-                    i_instance: instance.clone(),
-                    image: instance.image.as_ref().map(|image| {
-                        Image::from_uri(format!("file://{}", image.to_string_lossy()))
-                    }),
-                    version_json: Cell::new(None),
-                    launching: false.into(),
-                    prepared: false.into(),
-                }
+            .map(|instance| EguiInstance {
+                i_instance: instance.clone(),
+                image: instance
+                    .image
+                    .as_ref()
+                    .map(|image| Image::from_uri(format!("file://{}", image.to_string_lossy()))),
+                version_json: Cell::new(None),
+                launching: false.into(),
+                prepared: false.into(),
             })
             .collect();
 
@@ -283,9 +281,7 @@ impl LauncherGui {
         let event = self.rt.try_recv();
         if let Ok(message) = event {
             match message {
-                Response::Versions(manifest) => {
-                    self.data.versions = Some(manifest?.into())
-                }
+                Response::Versions(manifest) => self.data.versions = Some(manifest?.into()),
                 Response::Version(json) => {
                     let arc: Arc<VersionJson> = json?.into();
                     for instances in &mut self.instances {
@@ -881,7 +877,9 @@ impl eframe::App for LauncherGui {
                                         }
 
                                         if let Some(json) = instances.version_json.take() {
-                                            if instances.launching.get() && !instances.prepared.get() {
+                                            if instances.launching.get()
+                                                && !instances.prepared.get()
+                                            {
                                                 self.prepare_launch(&json, manifest);
                                                 instances.prepared.replace(true);
                                             } else {
