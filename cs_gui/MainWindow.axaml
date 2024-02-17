@@ -17,5 +17,7 @@
                 </ComboBox>
                 
                 <Button Name="LoginButton" Click="Button_OnClick">Login</Button>
+                
+                <ProgressBar Name="LibraryProgressBar" ></ProgressBar>
         </StackPanel>
 </Window>

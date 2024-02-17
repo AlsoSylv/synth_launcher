@@ -462,10 +462,10 @@ pub fn launch_game(
     let mut process = std::process::Command::new(java_path);
     let natives_dir = directory.join("natives");
 
-    json.arguments.jvm.iter().for_each(|arg| {
+    for arg in &json.arguments.jvm {
         if let Some(rules) = &arg.rules {
             if !rules.applies() {
-                return;
+                continue
             }
         }
 
@@ -488,7 +488,7 @@ pub fn launch_game(
                 process.arg(arg);
             }
         }
-    });
+    }
 
     process.arg(json.main_class());
 

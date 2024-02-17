@@ -48,7 +48,7 @@ public partial class MainWindow : Window
             }
         });
     }
-
+    
     private void VersionSelectBox_OnSelectionChanged(object? _, SelectionChangedEventArgs e)
     {
         if (_versionTask == null)

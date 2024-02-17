@@ -1,6 +1,9 @@
 mod tasks;
 
 use crate::state::state_mut;
+use crate::tasks::{
+    await_task, cancel_task, get_task, poll_task, ManifestTask, ManifestTaskWrapper, TaskWrapper,
+};
 use launcher_core::account::auth::{
     authorization_token_response, minecraft_ownership_response, minecraft_profile_response,
     minecraft_response, xbox_response, xbox_security_token_response,
@@ -11,10 +14,10 @@ use launcher_core::{AsyncLauncher, Error};
 use state::state;
 use std::path::PathBuf;
 use std::ptr::null_mut;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Once, OnceLock};
 use std::time::Duration;
 use tokio::runtime::Runtime;
-use crate::tasks::{await_task, cancel_task, get_task, ManifestTask, ManifestTaskWrapper, poll_task, TaskWrapper};
 
 mod state {
     use launcher_core::account::types::DeviceCodeResponse;
@@ -29,6 +32,7 @@ mod state {
         pub version_manifest: MaybeUninit<RwLock<Option<VersionManifest>>>,
         pub selected_version: MaybeUninit<RwLock<Option<VersionJson>>>,
         pub asset_index: MaybeUninit<RwLock<Option<AssetIndexJson>>>,
+        pub class_path: Cell<Option<String>>,
         pub path: MaybeUninit<PathBuf>,
         pub device_code: Cell<Option<DeviceCodeResponse>>,
     }
@@ -39,6 +43,7 @@ mod state {
                 version_manifest: MaybeUninit::uninit(),
                 selected_version: MaybeUninit::uninit(),
                 asset_index: MaybeUninit::uninit(),
+                class_path: Cell::new(None),
                 path: MaybeUninit::uninit(),
                 device_code: Cell::new(None),
             }
@@ -278,16 +283,14 @@ pub extern "C" fn poll_manifest_task(raw_task: *const ManifestTaskWrapper) -> bo
 /// # The task wrapper cannot be Null
 /// # The manifest wrapper cannot be null
 pub extern "C" fn await_version_manifest(raw_task: *mut ManifestTaskWrapper) -> NativeReturn {
-    await_task(raw_task as *mut ManifestTask, |inner| {
-        match inner {
-            Ok(manifest) => {
-                let mut lock = state().version_manifest().blocking_write();
-                *lock = Some(manifest);
-                drop(lock);
-                NativeReturn::success()
-            }
-            Err(e) => e.into(),
+    await_task(raw_task as *mut ManifestTask, |inner| match inner {
+        Ok(manifest) => {
+            let mut lock = state().version_manifest().blocking_write();
+            *lock = Some(manifest);
+            drop(lock);
+            NativeReturn::success()
         }
+        Err(e) => e.into(),
     })
 }
 
@@ -375,23 +378,23 @@ pub unsafe extern "C" fn poll_version_task(
 pub unsafe extern "C" fn await_version_task(
     raw_task: *mut TaskWrapper<Result<VersionJson, Error>>,
 ) -> NativeReturn {
-    await_task(raw_task, |inner| {
-        match inner {
-            Ok(version) => {
-                let mut writer = state().selected_version().blocking_write();
-                *writer = Some(version);
-                drop(writer);
-                NativeReturn::success()
-            }
-            Err(e) => e.into(),
+    await_task(raw_task, |inner| match inner {
+        Ok(version) => {
+            let mut writer = state().selected_version().blocking_write();
+            *writer = Some(version);
+            drop(writer);
+            NativeReturn::success()
         }
+        Err(e) => e.into(),
     })
 }
 
 #[no_mangle]
 /// # Safety
 /// This will drop a version task regardless of completion, this is only used when cancelling
-pub unsafe extern "C" fn cancel_version_task(raw_task: *mut TaskWrapper<Result<VersionJson, Error>>) {
+pub unsafe extern "C" fn cancel_version_task(
+    raw_task: *mut TaskWrapper<Result<VersionJson, Error>>,
+) {
     cancel_task(raw_task)
 }
 
@@ -421,16 +424,14 @@ pub extern "C" fn poll_asset_index(
 pub unsafe extern "C" fn await_asset_index(
     raw_task: *mut TaskWrapper<Result<AssetIndexJson, Error>>,
 ) -> NativeReturn {
-    await_task(raw_task, |inner| {
-        match inner {
-            Ok(version) => {
-                let mut writer = state().asset_index().blocking_write();
-                *writer = Some(version);
-                drop(writer);
-                NativeReturn::success()
-            }
-            Err(e) => e.into(),
+    await_task(raw_task, |inner| match inner {
+        Ok(version) => {
+            let mut writer = state().asset_index().blocking_write();
+            *writer = Some(version);
+            drop(writer);
+            NativeReturn::success()
         }
+        Err(e) => e.into(),
     })
 }
 
@@ -443,52 +444,101 @@ pub unsafe extern "C" fn cancel_asset_index(
 }
 
 #[no_mangle]
-pub fn get_libraries() -> *mut TaskWrapper<Result<String, Error>> {
-    todo!()
+/// # Safety
+/// Total and Finished will be treated like atomics
+pub unsafe fn get_libraries(
+    total: *mut u64,
+    finished: *mut u64,
+) -> *mut TaskWrapper<Result<String, Error>> {
+    let total = AtomicU64::from_ptr(total);
+    let finished = AtomicU64::from_ptr(finished);
+    get_task(async move {
+        let binding = state().selected_version().read().await;
+        let version = binding.as_ref().unwrap();
+        launcher()
+            .download_libraries_and_get_path(
+                version.libraries(),
+                &state().path().join("libraries"),
+                &state().path().join("natives"),
+                total,
+                finished,
+            )
+            .await
+    })
 }
 
 #[no_mangle]
 pub fn poll_libraries(raw_task: *const TaskWrapper<Result<String, Error>>) -> bool {
-    todo!()
+    poll_task(raw_task)
 }
 
 #[no_mangle]
 pub fn await_libraries(raw_task: *mut TaskWrapper<Result<String, Error>>) -> NativeReturn {
-    todo!()
+    await_task(raw_task, |inner| {
+        match inner {
+            Ok(class_path) => {
+                state().class_path.set(Some(class_path));
+                NativeReturn::success()
+            },
+            Err(e) => e.into()
+        }
+    })
 }
 
 #[no_mangle]
 pub fn cancel_libraries(raw_task: *mut TaskWrapper<Result<(), Error>>) {
-    todo!()
+    cancel_task(raw_task)
 }
 
 #[no_mangle]
-pub fn get_assets() -> *mut TaskWrapper<Result<(), Error>> {
-    todo!()
+/// # Safety
+/// Total and Finished will be treated like atomics
+pub unsafe fn get_assets(
+    total: *mut u64,
+    finished: *mut u64,
+) -> *mut TaskWrapper<Result<(), Error>> {
+    let total = AtomicU64::from_ptr(total);
+    let finished = AtomicU64::from_ptr(finished);
+    get_task(async move {
+        let binding = state().asset_index().read().await;
+        let asset_index = binding.as_ref().unwrap();
+        launcher()
+            .download_and_store_asset_index(
+                asset_index,
+                &state().path().join("assets"),
+                total,
+                finished,
+            )
+            .await
+    })
 }
 
 #[no_mangle]
 pub fn poll_assets(raw_task: *const TaskWrapper<Result<(), Error>>) -> bool {
-    todo!()
+    poll_task(raw_task)
 }
 
 #[no_mangle]
 pub fn await_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) -> NativeReturn {
-    todo!()
+    await_task(raw_task, |inner| {
+        if let Err(e) = inner {
+            e.into()
+        } else {
+            NativeReturn::success()
+        }
+    })
 }
 
 #[no_mangle]
 pub fn cancel_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) {
-    todo!()
+    cancel_task(raw_task)
 }
 
 pub const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
 
 #[no_mangle]
 pub extern "C" fn get_device_response() -> *mut TaskWrapper<Result<DeviceCodeResponse, Error>> {
-    get_task(async {
-        launcher_core::account::auth::device_response(client(), CLIENT_ID).await
-    })
+    get_task(async { launcher_core::account::auth::device_response(client(), CLIENT_ID).await })
 }
 
 #[no_mangle]
@@ -504,15 +554,13 @@ pub unsafe extern "C" fn poll_device_response(
 pub unsafe extern "C" fn await_device_response(
     raw_task: *mut TaskWrapper<Result<DeviceCodeResponse, Error>>,
 ) -> NativeReturn {
-    await_task(raw_task, |inner| {
-        match inner {
-            Ok(response) => {
-                state().device_code.set(Some(response));
+    await_task(raw_task, |inner| match inner {
+        Ok(response) => {
+            state().device_code.set(Some(response));
 
-                NativeReturn::success()
-            }
-            Err(e) => e.into(),
+            NativeReturn::success()
         }
+        Err(e) => e.into(),
     })
 }
 
@@ -544,9 +592,7 @@ pub extern "C" fn start_auth_loop() -> *mut TaskWrapper<Result<Account, Error>> 
 
 #[no_mangle]
 /// # Safety
-pub extern "C" fn poll_auth_loop(
-    raw_task: *mut TaskWrapper<Result<Account, Error>>,
-) -> bool {
+pub extern "C" fn poll_auth_loop(raw_task: *mut TaskWrapper<Result<Account, Error>>) -> bool {
     poll_task(raw_task)
 }
 
@@ -555,23 +601,19 @@ pub extern "C" fn poll_auth_loop(
 pub unsafe extern "C" fn await_auth_loop(
     raw_task: *mut TaskWrapper<Result<Account, Error>>,
 ) -> NativeReturn {
-    await_task(raw_task, |inner| {
-        match inner {
-            Ok(_response) => {
-                todo!("Store Account In Memory");
+    await_task(raw_task, |inner| match inner {
+        Ok(_response) => {
+            todo!("Store Account In Memory");
 
-                NativeReturn::success()
-            }
-            Err(e) => e.into(),
+            NativeReturn::success()
         }
+        Err(e) => e.into(),
     })
 }
 
 #[no_mangle]
 /// # Safety
-pub unsafe extern "C" fn cancel_auth_loop(
-    raw_task: *mut TaskWrapper<Result<Account, Error>>,
-) {
+pub unsafe extern "C" fn cancel_auth_loop(raw_task: *mut TaskWrapper<Result<Account, Error>>) {
     cancel_task(raw_task)
 }
 

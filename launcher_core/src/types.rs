@@ -448,7 +448,7 @@ impl<'de> Deserialize<'de> for Arguments {
                 Arguments { jvm, game: t.game }
             }
             TempArgs::String(s) => Arguments {
-                jvm: vec![
+                jvm: [
                     "-Djava.library.path=${natives_directory}",
                     "-Djna.tmpdir=${natives_directory}",
                     "-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}",
