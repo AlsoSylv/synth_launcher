@@ -1,19 +1,17 @@
 using System;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Threading.Tasks;
+using System.Threading;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
-using CsBindgen;
 
 namespace cs_gui;
 
 public partial class UserCodeWindow : Window {
     private readonly string _userCode;
     private readonly string _verificationUrl;
+    private readonly CancellationTokenSource _cancelToken = new ();
     
     public UserCodeWindow(string userCode, string verificationUrl) {
         _userCode = userCode;
@@ -21,6 +19,11 @@ public partial class UserCodeWindow : Window {
 
         InitializeComponent();
 
+        Closing += (_, _) =>
+        {
+            _cancelToken.Cancel();
+        };
+        
         UserCodeDisplay.Text = _userCode;
     }
 
@@ -49,17 +52,17 @@ public partial class UserCodeWindow : Window {
         };
 
         Dispatcher.UIThread.InvokeAsync(async () => {
-            await SafeNativeMethods.Auth();
+            await SafeNativeMethods.Auth(_cancelToken.Token);
             Close();
         });
     }
 
-    private void UserUrl_OnPointerEntered(object? sender, PointerEventArgs e) {
+    private void UserUrl_OnPointerEntered(object? _, PointerEventArgs e) {
         UserUrl.Foreground = Brushes.CornflowerBlue;
         UserUrl.TextDecorations = TextDecorations.Underline;
     }
 
-    private void UserUrl_OnPointerExited(object? sender, PointerEventArgs e) {
+    private void UserUrl_OnPointerExited(object? _, PointerEventArgs e) {
         UserUrl.Foreground = Foreground;
         UserUrl.TextDecorations = null;
     }

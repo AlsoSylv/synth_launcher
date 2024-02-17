@@ -287,7 +287,6 @@ impl AsyncLauncher {
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
         total.store(0, std::sync::atomic::Ordering::Relaxed);
 
-        #[allow(clippy::question_mark)]
         stream::iter(libraries.iter().filter_map(|library| {
             let native = library.rule.native();
 

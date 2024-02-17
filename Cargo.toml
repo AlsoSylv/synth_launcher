@@ -4,7 +4,7 @@ members = [
     "egui_fe",
     "egui_fe/async_bridge",
     "cs_gui/csbindings",
-    "gtk_fe",
+    "gtk_fe", "fabric_installer_rs",
 ]
 resolver = "2"
 

@@ -16,7 +16,7 @@ namespace CsBindgen
 
 
 
-        /// <summary># Safety Path needs to be a valid UTF-16 Len must be the len of the vector length, not the char length</summary>
+        /// <summary>This MUST be called before ANY other native methods are run # Safety Path needs to be a valid UTF-16 Len must be the len of the vector length, not the char length</summary>
         [DllImport(__DllName, EntryPoint = "init", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern void init(ushort* path, nuint len);
 
@@ -26,11 +26,11 @@ namespace CsBindgen
         /// <summary># Safety # The task cannot be null, and has to be a manifest task. # The type cannot be checked by the Rust or C# compiler, and must instead be checked by the programmer.</summary>
         [DllImport(__DllName, EntryPoint = "poll_manifest_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.U1)]
-        public static extern bool poll_manifest_task(ManifestTaskWrapper* task);
+        public static extern bool poll_manifest_task(ManifestTaskWrapper* raw_task);
 
         /// <summary>This function consumes the task wrapper, dropping it, setting the manifest wrapper to a proper value And then return a NativeReturn, specifying if it's a success or error This is used to tell if this should be converted a C# exception  # Safety # The task wrapper cannot be Null # The manifest wrapper cannot be null</summary>
         [DllImport(__DllName, EntryPoint = "await_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern NativeReturn await_version_manifest(ManifestTaskWrapper* task);
+        public static extern NativeReturn await_version_manifest(ManifestTaskWrapper* raw_task);
 
         /// <summary># Safety Task mut not be null Attempting to cancel a finished task should result in a panic</summary>
         [DllImport(__DllName, EntryPoint = "cancel_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -62,35 +62,41 @@ namespace CsBindgen
         /// <summary># Safety # The task cannot be null, and has to be a version task. # The type cannot be checked by the Rust or C# compiler, and must instead be checked by the programmer.</summary>
         [DllImport(__DllName, EntryPoint = "poll_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.U1)]
-        public static extern bool poll_version_task(TaskWrapper* task);
+        public static extern bool poll_version_task(TaskWrapper* raw_task);
 
+        /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "await_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern NativeReturn await_version_task(TaskWrapper* raw_task);
 
-        /// <summary>This will drop a version task regardless of completion, this is only used when cancelling</summary>
+        /// <summary># Safety This will drop a version task regardless of completion, this is only used when cancelling</summary>
         [DllImport(__DllName, EntryPoint = "cancel_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern void cancel_version_task(TaskWrapper* raw_task);
 
         [DllImport(__DllName, EntryPoint = "get_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern TaskWrapper* get_asset_index();
 
+        /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "poll_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.U1)]
-        public static extern bool poll_asset_index(TaskWrapper* task_wrapper);
+        public static extern bool poll_asset_index(TaskWrapper* raw_task);
 
+        /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "await_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern NativeReturn await_asset_index(TaskWrapper* task_wrapper);
+        public static extern NativeReturn await_asset_index(TaskWrapper* raw_task);
 
+        /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "cancel_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void cancel_asset_index(TaskWrapper* task_wrapper);
+        public static extern void cancel_asset_index(TaskWrapper* raw_task);
 
         [DllImport(__DllName, EntryPoint = "get_device_response", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern TaskWrapper* get_device_response();
 
+        /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "poll_device_response", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.U1)]
         public static extern bool poll_device_response(TaskWrapper* raw_task);
 
+        /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "await_device_response", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern NativeReturn await_device_response(TaskWrapper* raw_task);
 
@@ -103,12 +109,18 @@ namespace CsBindgen
         [DllImport(__DllName, EntryPoint = "start_auth_loop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern TaskWrapper* start_auth_loop();
 
+        /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "poll_auth_loop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.U1)]
         public static extern bool poll_auth_loop(TaskWrapper* raw_task);
 
+        /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "await_auth_loop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern NativeReturn await_auth_loop(TaskWrapper* raw_task);
+
+        /// <summary># Safety</summary>
+        [DllImport(__DllName, EntryPoint = "cancel_auth_loop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void cancel_auth_loop(TaskWrapper* raw_task);
 
 
     }
@@ -118,16 +130,6 @@ namespace CsBindgen
     {
         public Code code;
         public OwnedStringWrapper error;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    internal unsafe partial struct TaskWrapper
-    {
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    internal unsafe partial struct ManifestTaskWrapper
-    {
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -143,6 +145,16 @@ namespace CsBindgen
         public byte* char_ptr;
         public nuint len;
         public nuint capacity;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct TaskWrapper
+    {
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct ManifestTaskWrapper
+    {
     }
 
 

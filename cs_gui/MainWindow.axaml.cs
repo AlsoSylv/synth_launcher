@@ -6,52 +6,59 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 
 namespace cs_gui;
 
-public partial class MainWindow : Window {
+public partial class MainWindow : Window
+{
     private Task? _versionTask;
     private readonly CancellationTokenSource _token = new();
-    private static UserCodeWindow? _userCodeWindow;
 
-    public MainWindow() {
+    public MainWindow()
+    {
         InitializeComponent();
 
         var task = SafeNativeMethods.GetManifest();
 
-        try {
-            task.Wait();
+        VersionSelectBox.IsEnabled = false;
 
-            var list = new List<string>();
-            var len = SafeNativeMethods.ManifestLength();
+        Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            try
+            {
+                await task;
+                VersionSelectBox.IsEnabled = true;
+                var list = new List<string>();
+                var len = SafeNativeMethods.ManifestLength();
 
-            for (UIntPtr idx = 0; idx < len; idx++) {
-                list.Add(Encoding.UTF8.GetString(SafeNativeMethods.GetVersionId(idx)));
+                for (UIntPtr idx = 0; idx < len; idx++)
+                    list.Add(Encoding.UTF8.GetString(SafeNativeMethods.GetVersionId(idx)));
+
+                VersionSelectBox.ItemsSource = list;
             }
-
-            VersionSelectBox.ItemsSource = list;
-        }
-        catch (AggregateException ae) {
-            ae.Handle(x => {
-                if (x is not RustException) return false;
-                Console.WriteLine(x);
-                return true;
-            });
-        }
+            catch (AggregateException ae)
+            {
+                ae.Handle(x =>
+                {
+                    if (x is not RustException) return false;
+                    Console.WriteLine(x);
+                    return true;
+                });
+            }
+        });
     }
 
-    public static void CloseUserCodeWindow() {
-        Debug.Assert(_userCodeWindow != null, nameof(_userCodeWindow) + " != null");
-        _userCodeWindow.Close();
-    }
-
-    private async void VersionSelectBox_OnSelectionChanged(object? _, SelectionChangedEventArgs e) {
-        if (_versionTask == null) {
+    private void VersionSelectBox_OnSelectionChanged(object? _, SelectionChangedEventArgs e)
+    {
+        if (_versionTask == null)
+        {
             var index = VersionSelectBox.SelectedIndex;
             _versionTask = SafeNativeMethods.GetVersion((nuint)index, _token.Token);
         }
-        else {
-            await _token.CancelAsync();
+        else
+        {
+            if (!_versionTask.IsCompleted) _token.Cancel();
             _token.TryReset();
 
             var index = VersionSelectBox.SelectedIndex;
@@ -59,12 +66,18 @@ public partial class MainWindow : Window {
         }
     }
 
-    private async void Button_OnClick(object? sender, RoutedEventArgs e) {
-        await SafeNativeMethods.GetDeviceResponse;
-        var window = new UserCodeWindow(SafeNativeMethods.GetCode(), SafeNativeMethods.GetUrl());
-        
-        window.Show();
+    private void Button_OnClick(object? sender, RoutedEventArgs e)
+    {
+        LoginButton.IsEnabled = false;
 
-        _userCodeWindow = window;
+        Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            await SafeNativeMethods.GetDeviceResponse;
+            var window = new UserCodeWindow(SafeNativeMethods.GetCode(), SafeNativeMethods.GetUrl());
+
+            window.Show();
+
+            window.Closed += delegate { LoginButton.IsEnabled = true; };
+        });
     }
 }

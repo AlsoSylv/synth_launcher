@@ -16,6 +16,6 @@
                         </ComboBox.ItemTemplate>
                 </ComboBox>
                 
-                <Button Click="Button_OnClick">Login</Button>
+                <Button Name="LoginButton" Click="Button_OnClick">Login</Button>
         </StackPanel>
 </Window>

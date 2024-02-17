@@ -1,19 +1,20 @@
+mod tasks;
+
 use crate::state::state_mut;
 use launcher_core::account::auth::{
     authorization_token_response, minecraft_ownership_response, minecraft_profile_response,
     minecraft_response, xbox_response, xbox_security_token_response,
 };
 use launcher_core::account::types::{Account, DeviceCodeResponse};
-use launcher_core::types::{AssetIndexJson, VersionJson, VersionManifest};
+use launcher_core::types::{AssetIndexJson, VersionJson};
 use launcher_core::{AsyncLauncher, Error};
 use state::state;
-use std::future::Future;
 use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::sync::{Once, OnceLock};
 use std::time::Duration;
 use tokio::runtime::Runtime;
-use tokio::task::JoinHandle;
+use crate::tasks::{await_task, cancel_task, get_task, ManifestTask, ManifestTaskWrapper, poll_task, TaskWrapper};
 
 mod state {
     use launcher_core::account::types::DeviceCodeResponse;
@@ -82,14 +83,14 @@ mod state {
     }
 }
 
-fn runtime() -> &'static Runtime {
+pub fn runtime() -> &'static Runtime {
     static LOCK: OnceLock<Runtime> = OnceLock::new();
     LOCK.get_or_init(|| Runtime::new().unwrap())
 }
 
 fn client() -> &'static reqwest::Client {
     static LOCK: OnceLock<reqwest::Client> = OnceLock::new();
-    LOCK.get_or_init(|| reqwest::Client::new())
+    LOCK.get_or_init(reqwest::Client::new)
 }
 
 fn launcher() -> &'static AsyncLauncher {
@@ -186,50 +187,6 @@ impl From<DeviceCodeResponse> for DeviceCode {
     }
 }
 
-pub struct TaskWrapper<T> {
-    inner: Option<JoinHandle<T>>,
-}
-
-impl<T> TaskWrapper<T> {
-    pub fn new<F>(t: F) -> Self
-    where
-        F: Future<Output = T> + Send + Sync + 'static,
-        T: Send + Sync + 'static,
-    {
-        Self {
-            inner: Some(runtime().spawn(t)),
-        }
-    }
-
-    pub fn into_raw(self) -> *mut Self {
-        Box::into_raw(Box::new(self))
-    }
-}
-
-#[allow(dead_code)]
-pub struct ManifestTaskWrapper(*mut ManifestTask);
-type ManifestTask = TaskWrapper<Result<VersionManifest, Error>>;
-
-/// # Safety
-/// Because of type erasure, the compiler doesn't know if the pointer that's dereference is the right type
-/// The solution to this is multiple types that the C code can hold
-/// This checks for null, and panics, otherwise returning a mutable reference
-unsafe fn read_task_mut<T>(task: *mut TaskWrapper<T>) -> &'static mut TaskWrapper<T> {
-    assert!(!task.is_null());
-
-    task.as_mut().unwrap_unchecked()
-}
-
-/// # Safety
-/// Because of type erasure, the compiler doesn't know if the pointer that's dereference is the right type
-/// The solution to this is multiple types that the C code can hold
-/// This checks for null, and panics, otherwise returning a mutable reference
-unsafe fn read_task_ref<T>(task: *const TaskWrapper<T>) -> &'static TaskWrapper<T> {
-    assert!(!task.is_null());
-
-    task.as_ref().unwrap_unchecked()
-}
-
 #[repr(C)]
 pub struct RefStringWrapper {
     pub char_ptr: *const u8,
@@ -279,6 +236,7 @@ impl OwnedStringWrapper {
 }
 
 #[no_mangle]
+/// This MUST be called before ANY other native methods are run
 /// # Safety
 /// Path needs to be a valid UTF-16
 /// Len must be the len of the vector length, not the char length
@@ -296,22 +254,19 @@ pub unsafe extern "C" fn init(path: *const u16, len: usize) {
 
 #[no_mangle]
 pub extern "C" fn get_version_manifest() -> *mut ManifestTaskWrapper {
-    let task = TaskWrapper::new(async {
+    get_task(async {
         launcher()
             .get_version_manifest(&state().path().join("versions"))
             .await
-    });
-
-    task.into_raw() as *mut ManifestTaskWrapper
+    }) as _
 }
 
 #[no_mangle]
 ///# Safety
 ///# The task cannot be null, and has to be a manifest task.
 ///# The type cannot be checked by the Rust or C# compiler, and must instead be checked by the programmer.
-pub unsafe extern "C" fn poll_manifest_task(task: *const ManifestTaskWrapper) -> bool {
-    let task = read_task_ref(task as *const ManifestTask);
-    task.inner.as_ref().unwrap().is_finished()
+pub extern "C" fn poll_manifest_task(raw_task: *const ManifestTaskWrapper) -> bool {
+    poll_task(raw_task as *const ManifestTask)
 }
 
 #[no_mangle]
@@ -322,36 +277,26 @@ pub unsafe extern "C" fn poll_manifest_task(task: *const ManifestTaskWrapper) ->
 /// # Safety
 /// # The task wrapper cannot be Null
 /// # The manifest wrapper cannot be null
-pub unsafe extern "C" fn await_version_manifest(task: *mut ManifestTaskWrapper) -> NativeReturn {
-    let result = runtime()
-        .block_on(
-            read_task_mut(task as *mut ManifestTask)
-                .inner
-                .take()
-                .unwrap(),
-        )
-        .unwrap();
-    drop(Box::from_raw(task));
-
-    match result {
-        Ok(manifest) => {
-            let mut lock = state().version_manifest().blocking_write();
-            *lock = Some(manifest);
-            drop(lock);
-            NativeReturn::success()
+pub extern "C" fn await_version_manifest(raw_task: *mut ManifestTaskWrapper) -> NativeReturn {
+    await_task(raw_task as *mut ManifestTask, |inner| {
+        match inner {
+            Ok(manifest) => {
+                let mut lock = state().version_manifest().blocking_write();
+                *lock = Some(manifest);
+                drop(lock);
+                NativeReturn::success()
+            }
+            Err(e) => e.into(),
         }
-        Err(e) => e.into(),
-    }
+    })
 }
 
 #[no_mangle]
 /// # Safety
 /// Task mut not be null
 /// Attempting to cancel a finished task should result in a panic
-pub unsafe extern "C" fn cancel_version_manifest(task: *mut ManifestTaskWrapper) {
-    let task = read_task_mut(task as *mut ManifestTask);
-    task.inner.take().unwrap().abort();
-    unsafe { drop(Box::from_raw(task as *mut ManifestTask)) }
+pub extern "C" fn cancel_version_manifest(task: *mut ManifestTaskWrapper) {
+    cancel_task(task as *mut ManifestTask)
 }
 
 #[no_mangle]
@@ -402,7 +347,7 @@ pub unsafe extern "C" fn free_owned_string_wrapper(string_wrapper: OwnedStringWr
 
 #[no_mangle]
 pub extern "C" fn get_version_task(index: usize) -> *mut TaskWrapper<Result<VersionJson, Error>> {
-    let task = TaskWrapper::new(async move {
+    get_task(async move {
         let manifest = state().version_manifest().read().await;
         if let Some(manifest) = &*manifest {
             let version = &manifest.versions[index];
@@ -412,9 +357,7 @@ pub extern "C" fn get_version_task(index: usize) -> *mut TaskWrapper<Result<Vers
         } else {
             panic!("Guh")
         }
-    });
-
-    task.into_raw()
+    })
 }
 
 #[no_mangle]
@@ -422,22 +365,18 @@ pub extern "C" fn get_version_task(index: usize) -> *mut TaskWrapper<Result<Vers
 ///# The task cannot be null, and has to be a version task.
 ///# The type cannot be checked by the Rust or C# compiler, and must instead be checked by the programmer.
 pub unsafe extern "C" fn poll_version_task(
-    task: *mut TaskWrapper<Result<VersionJson, Error>>,
+    raw_task: *const TaskWrapper<Result<VersionJson, Error>>,
 ) -> bool {
-    let task = read_task_mut(task);
-    task.inner.as_ref().unwrap().is_finished()
+    poll_task(raw_task)
 }
 
 #[no_mangle]
-pub extern "C" fn await_version_task(
+/// # Safety
+pub unsafe extern "C" fn await_version_task(
     raw_task: *mut TaskWrapper<Result<VersionJson, Error>>,
 ) -> NativeReturn {
-    let task = unsafe { raw_task.as_mut() };
-
-    if let Some(task) = task {
-        let version = runtime().block_on(task.inner.take().unwrap()).unwrap();
-        unsafe { drop(Box::from_raw(raw_task)) }
-        match version {
+    await_task(raw_task, |inner| {
+        match inner {
             Ok(version) => {
                 let mut writer = state().selected_version().blocking_write();
                 *writer = Some(version);
@@ -446,59 +385,44 @@ pub extern "C" fn await_version_task(
             }
             Err(e) => e.into(),
         }
-    } else {
-        panic!("Null Pointer Exception")
-    }
+    })
 }
 
 #[no_mangle]
+/// # Safety
 /// This will drop a version task regardless of completion, this is only used when cancelling
-pub extern "C" fn cancel_version_task(raw_task: *mut TaskWrapper<Result<VersionJson, Error>>) {
-    if raw_task.is_null() {
-        panic!("Null Pointer Exception")
-    }
-    unsafe { (*raw_task).inner.take().unwrap().abort() }
-    unsafe { drop(Box::from_raw(raw_task)) }
+pub unsafe extern "C" fn cancel_version_task(raw_task: *mut TaskWrapper<Result<VersionJson, Error>>) {
+    cancel_task(raw_task)
 }
 
 #[no_mangle]
 pub extern "C" fn get_asset_index() -> *mut TaskWrapper<Result<AssetIndexJson, Error>> {
-    let launcher = launcher();
-    let task = TaskWrapper::new(async move {
+    get_task(async move {
         let version = state().selected_version();
         let path = state().path();
         let tmp = version.read().await;
         let version = tmp.as_ref().unwrap();
-        launcher
+        launcher()
             .get_asset_index_json(&version.asset_index, path)
             .await
-    });
-
-    task.into_raw()
+    })
 }
 
 #[no_mangle]
+/// # Safety
 pub extern "C" fn poll_asset_index(
-    task_wrapper: *mut TaskWrapper<Result<AssetIndexJson, Error>>,
+    raw_task: *const TaskWrapper<Result<AssetIndexJson, Error>>,
 ) -> bool {
-    let task_ref = unsafe { task_wrapper.as_ref() };
-    if let Some(task) = task_ref {
-        task.inner.as_ref().unwrap().is_finished()
-    } else {
-        panic!("Null Pointer Exception");
-    }
+    poll_task(raw_task)
 }
 
 #[no_mangle]
-pub extern "C" fn await_asset_index(
-    task_wrapper: *mut TaskWrapper<Result<AssetIndexJson, Error>>,
+/// # Safety
+pub unsafe extern "C" fn await_asset_index(
+    raw_task: *mut TaskWrapper<Result<AssetIndexJson, Error>>,
 ) -> NativeReturn {
-    let task = unsafe { task_wrapper.as_mut() };
-
-    if let Some(task) = task {
-        let version = runtime().block_on(task.inner.take().unwrap()).unwrap();
-        unsafe { drop(Box::from_raw(task_wrapper)) }
-        match version {
+    await_task(raw_task, |inner| {
+        match inner {
             Ok(version) => {
                 let mut writer = state().asset_index().blocking_write();
                 *writer = Some(version);
@@ -507,58 +431,89 @@ pub extern "C" fn await_asset_index(
             }
             Err(e) => e.into(),
         }
-    } else {
-        panic!("Null Pointer Exception")
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn cancel_asset_index(
-    task_wrapper: *mut TaskWrapper<Result<AssetIndexJson, Error>>,
+/// # Safety
+pub unsafe extern "C" fn cancel_asset_index(
+    raw_task: *mut TaskWrapper<Result<AssetIndexJson, Error>>,
 ) {
-    if task_wrapper.is_null() {
-        panic!("Null Pointer Exception")
-    }
-    unsafe { read_task_mut(task_wrapper).inner.take().unwrap().abort() }
-    unsafe { drop(Box::from_raw(task_wrapper)) }
+    cancel_task(raw_task)
+}
+
+#[no_mangle]
+pub fn get_libraries() -> *mut TaskWrapper<Result<String, Error>> {
+    todo!()
+}
+
+#[no_mangle]
+pub fn poll_libraries(raw_task: *const TaskWrapper<Result<String, Error>>) -> bool {
+    todo!()
+}
+
+#[no_mangle]
+pub fn await_libraries(raw_task: *mut TaskWrapper<Result<String, Error>>) -> NativeReturn {
+    todo!()
+}
+
+#[no_mangle]
+pub fn cancel_libraries(raw_task: *mut TaskWrapper<Result<(), Error>>) {
+    todo!()
+}
+
+#[no_mangle]
+pub fn get_assets() -> *mut TaskWrapper<Result<(), Error>> {
+    todo!()
+}
+
+#[no_mangle]
+pub fn poll_assets(raw_task: *const TaskWrapper<Result<(), Error>>) -> bool {
+    todo!()
+}
+
+#[no_mangle]
+pub fn await_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) -> NativeReturn {
+    todo!()
+}
+
+#[no_mangle]
+pub fn cancel_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) {
+    todo!()
 }
 
 pub const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
 
 #[no_mangle]
 pub extern "C" fn get_device_response() -> *mut TaskWrapper<Result<DeviceCodeResponse, Error>> {
-    let task = TaskWrapper::new(async {
+    get_task(async {
         launcher_core::account::auth::device_response(client(), CLIENT_ID).await
-    });
-
-    task.into_raw()
+    })
 }
 
 #[no_mangle]
+/// # Safety
 pub unsafe extern "C" fn poll_device_response(
-    raw_task: *mut TaskWrapper<Result<DeviceCodeResponse, Error>>,
+    raw_task: *const TaskWrapper<Result<DeviceCodeResponse, Error>>,
 ) -> bool {
-    let task = read_task_ref(raw_task);
-
-    task.inner.as_ref().unwrap().is_finished()
+    poll_task(raw_task)
 }
 
 #[no_mangle]
+/// # Safety
 pub unsafe extern "C" fn await_device_response(
     raw_task: *mut TaskWrapper<Result<DeviceCodeResponse, Error>>,
 ) -> NativeReturn {
-    let task = read_task_mut(raw_task);
+    await_task(raw_task, |inner| {
+        match inner {
+            Ok(response) => {
+                state().device_code.set(Some(response));
 
-    let inner = runtime().block_on(task.inner.take().unwrap()).unwrap();
-
-    match inner {
-        Ok(response) => {
-            state().device_code.set(Some(response));
-
-            NativeReturn::success()
+                NativeReturn::success()
+            }
+            Err(e) => e.into(),
         }
-        Err(e) => e.into(),
-    }
+    })
 }
 
 #[no_mangle]
@@ -581,39 +536,43 @@ pub extern "C" fn get_url() -> RefStringWrapper {
 
 #[no_mangle]
 pub extern "C" fn start_auth_loop() -> *mut TaskWrapper<Result<Account, Error>> {
-    let task = TaskWrapper::new(async {
+    get_task(async {
         let device_response = unsafe { &*state().device_code.as_ptr() }.as_ref().unwrap();
         auth_loop(device_response).await
-    });
-
-    task.into_raw()
+    })
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn poll_auth_loop(
+/// # Safety
+pub extern "C" fn poll_auth_loop(
     raw_task: *mut TaskWrapper<Result<Account, Error>>,
 ) -> bool {
-    let task = read_task_ref(raw_task);
-
-    task.inner.as_ref().unwrap().is_finished()
+    poll_task(raw_task)
 }
 
 #[no_mangle]
+/// # Safety
 pub unsafe extern "C" fn await_auth_loop(
     raw_task: *mut TaskWrapper<Result<Account, Error>>,
 ) -> NativeReturn {
-    let task = read_task_mut(raw_task);
+    await_task(raw_task, |inner| {
+        match inner {
+            Ok(_response) => {
+                todo!("Store Account In Memory");
 
-    let inner = runtime().block_on(task.inner.take().unwrap()).unwrap();
-
-    match inner {
-        Ok(_response) => {
-            todo!("Store Account In Memory");
-
-            NativeReturn::success()
+                NativeReturn::success()
+            }
+            Err(e) => e.into(),
         }
-        Err(e) => e.into(),
-    }
+    })
+}
+
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn cancel_auth_loop(
+    raw_task: *mut TaskWrapper<Result<Account, Error>>,
+) {
+    cancel_task(raw_task)
 }
 
 async fn auth_loop(device_response: &DeviceCodeResponse) -> Result<Account, Error> {

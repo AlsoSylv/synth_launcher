@@ -100,12 +100,27 @@ internal static class SafeNativeMethods {
             }
         }, token);
     
-    public static Task Auth() =>
+    public static Task Auth(CancellationToken token) =>
         Task.Run(() => {
             unsafe {
+                if (token.IsCancellationRequested) token.ThrowIfCancellationRequested();
                 var taskPointer = NativeMethods.start_auth_loop();
                 while (!NativeMethods.poll_auth_loop(taskPointer)) {
-                    Task.Delay(100); 
+                    try
+                    {
+                        Task.Delay(100, token);
+                    }
+                    catch (Exception)
+                    {
+                        NativeMethods.cancel_auth_loop(taskPointer);
+                        throw;
+                    }
+                }
+
+                if (token.IsCancellationRequested)
+                {
+                    NativeMethods.cancel_auth_loop(taskPointer);
+                    token.ThrowIfCancellationRequested();
                 }
 
                 var value = NativeMethods.await_auth_loop(taskPointer);
@@ -114,7 +129,7 @@ internal static class SafeNativeMethods {
                     throw new RustException(value);
                 }
             }
-        });
+        }, token);
 
     public static Task GetDeviceResponse => Task.Run(() => {
         unsafe {
