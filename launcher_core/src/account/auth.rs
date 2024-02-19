@@ -31,7 +31,7 @@ pub async fn authorization_token_response(
         .form(&[
             ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ("client_id", client_id),
-            ("device_code", &device_code),
+            ("device_code", device_code),
         ])
         .send()
         .await?

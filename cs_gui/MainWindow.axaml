@@ -19,5 +19,7 @@
                 <Button Name="LoginButton" Click="Button_OnClick">Login</Button>
                 
                 <ProgressBar Name="LibraryProgressBar" ></ProgressBar>
+                
+                <Button Name="PlayButton" Click="PlayButton_OnClick">Player</Button>
         </StackPanel>
 </Window>

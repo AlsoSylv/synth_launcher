@@ -465,7 +465,7 @@ pub fn launch_game(
     for arg in &json.arguments.jvm {
         if let Some(rules) = &arg.rules {
             if !rules.applies() {
-                continue
+                continue;
             }
         }
 

@@ -2,7 +2,8 @@ mod tasks;
 
 use crate::state::state_mut;
 use crate::tasks::{
-    await_task, cancel_task, get_task, poll_task, ManifestTask, ManifestTaskWrapper, TaskWrapper,
+    await_task, cancel_task, get_task, poll_task, ManifestTask, ManifestTaskWrapper,
+    TaskWrapper,
 };
 use launcher_core::account::auth::{
     authorization_token_response, minecraft_ownership_response, minecraft_profile_response,
@@ -446,7 +447,7 @@ pub unsafe extern "C" fn cancel_asset_index(
 #[no_mangle]
 /// # Safety
 /// Total and Finished will be treated like atomics
-pub unsafe fn get_libraries(
+pub unsafe extern "C" fn get_libraries(
     total: *mut u64,
     finished: *mut u64,
 ) -> *mut TaskWrapper<Result<String, Error>> {
@@ -468,32 +469,30 @@ pub unsafe fn get_libraries(
 }
 
 #[no_mangle]
-pub fn poll_libraries(raw_task: *const TaskWrapper<Result<String, Error>>) -> bool {
+pub extern "C" fn poll_libraries(raw_task: *const TaskWrapper<Result<String, Error>>) -> bool {
     poll_task(raw_task)
 }
 
 #[no_mangle]
-pub fn await_libraries(raw_task: *mut TaskWrapper<Result<String, Error>>) -> NativeReturn {
-    await_task(raw_task, |inner| {
-        match inner {
-            Ok(class_path) => {
-                state().class_path.set(Some(class_path));
-                NativeReturn::success()
-            },
-            Err(e) => e.into()
+pub extern "C" fn await_libraries(raw_task: *mut TaskWrapper<Result<String, Error>>) -> NativeReturn {
+    await_task(raw_task, |inner| match inner {
+        Ok(class_path) => {
+            state().class_path.set(Some(class_path));
+            NativeReturn::success()
         }
+        Err(e) => e.into(),
     })
 }
 
 #[no_mangle]
-pub fn cancel_libraries(raw_task: *mut TaskWrapper<Result<(), Error>>) {
+pub extern "C" fn cancel_libraries(raw_task: *mut TaskWrapper<Result<(), Error>>) {
     cancel_task(raw_task)
 }
 
 #[no_mangle]
 /// # Safety
 /// Total and Finished will be treated like atomics
-pub unsafe fn get_assets(
+pub unsafe extern "C" fn get_assets(
     total: *mut u64,
     finished: *mut u64,
 ) -> *mut TaskWrapper<Result<(), Error>> {
@@ -514,12 +513,12 @@ pub unsafe fn get_assets(
 }
 
 #[no_mangle]
-pub fn poll_assets(raw_task: *const TaskWrapper<Result<(), Error>>) -> bool {
+pub extern "C" fn poll_assets(raw_task: *const TaskWrapper<Result<(), Error>>) -> bool {
     poll_task(raw_task)
 }
 
 #[no_mangle]
-pub fn await_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) -> NativeReturn {
+pub extern "C" fn await_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) -> NativeReturn {
     await_task(raw_task, |inner| {
         if let Err(e) = inner {
             e.into()
@@ -530,8 +529,44 @@ pub fn await_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) -> NativeRetu
 }
 
 #[no_mangle]
-pub fn cancel_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) {
+pub extern "C" fn cancel_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) {
     cancel_task(raw_task)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_jar(
+    total: *mut u64,
+    finished: *mut u64,
+) -> *mut TaskWrapper<Result<String, Error>> {
+    let total = AtomicU64::from_ptr(total);
+    let finished = AtomicU64::from_ptr(finished);
+    get_task(async move {
+        let binding = state().selected_version().read().await;
+        let version = binding.as_ref().unwrap();
+        launcher()
+            .download_jar(version, &state().path().join("versions"), total, finished)
+            .await
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn poll_jar(raw_task: *mut TaskWrapper<Result<String, Error>>) -> bool {
+    poll_task(raw_task)
+}
+
+#[no_mangle]
+pub extern "C" fn await_jar(raw_task: *mut TaskWrapper<Result<String, Error>>) -> NativeReturn {
+    await_task(raw_task, |inner| todo!())
+}
+
+#[no_mangle]
+pub extern "C" fn cancel_jar(raw_task: *mut TaskWrapper<Result<String, Error>>) {
+    cancel_task(raw_task)
+}
+
+#[no_mangle]
+pub extern "C" fn play() {
+    todo!()
 }
 
 pub const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";

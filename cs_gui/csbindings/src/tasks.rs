@@ -1,21 +1,22 @@
-use std::future::Future;
-use tokio::task::JoinHandle;
-use launcher_core::Error;
+use crate::{runtime, NativeReturn};
 use launcher_core::types::VersionManifest;
-use crate::{NativeReturn, runtime};
+use launcher_core::Error;
+use std::future::Future;
+use std::mem::ManuallyDrop;
+use tokio::task::JoinHandle;
 
 pub struct TaskWrapper<T> {
-    pub inner: Option<JoinHandle<T>>,
+    pub inner: ManuallyDrop<JoinHandle<T>>,
 }
 
 impl<T> TaskWrapper<T> {
     pub fn new<F>(t: F) -> Self
-        where
-            F: Future<Output = T> + Send + 'static,
-            T: Send + 'static,
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
     {
         Self {
-            inner: Some(runtime().spawn(t)),
+            inner: ManuallyDrop::new(runtime().spawn(t)),
         }
     }
 
@@ -32,63 +33,50 @@ pub type ManifestTask = TaskWrapper<Result<VersionManifest, Error>>;
 #[inline]
 fn check_task_ptr<T>(task: *const TaskWrapper<T>) {
     assert!(!task.is_null());
-    assert_eq!(task.align_offset(std::mem::align_of::<*const TaskWrapper<T>>()), 0);
+    assert_eq!(
+        task.align_offset(std::mem::align_of::<*const TaskWrapper<T>>()),
+        0
+    );
 }
 
-/// Because of type erasure, the compiler doesn't know if the pointer that's dereference is the right type
-/// The solution to this is multiple types that the C code can hold
-/// This checks for null, and panics, otherwise returning a mutable reference
-pub fn read_task_mut<T>(task: *mut TaskWrapper<T>) -> &'static mut TaskWrapper<T> {
-    check_task_ptr(task);
-
-    unsafe {
-        task.as_mut().unwrap_unchecked()
-    }
-}
-
-/// Because of type erasure, the compiler doesn't know if the pointer that's dereference is the right type
-/// The solution to this is multiple types that the C code can hold
-/// This checks for null, and panics, otherwise returning a mutable reference
-pub fn read_task_ref<T>(task: *const TaskWrapper<T>) -> &'static TaskWrapper<T> {
-    check_task_ptr(task);
-
-    unsafe {
-        task.as_ref().unwrap_unchecked()
-    }
-}
-
-pub fn get_task<F, T>(f: F) -> *mut TaskWrapper<T> where F: Future<Output = T> + Send + 'static, T: Send + 'static {
+pub fn get_task<F, T>(f: F) -> *mut TaskWrapper<T>
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
     TaskWrapper::new(f).into_raw()
 }
 
-pub fn poll_task<T>(task: *const TaskWrapper<T>) -> bool where T: 'static {
-    check_task_ptr(task);
-
-    read_task_ref(task).inner.as_ref().unwrap().is_finished()
-}
-
-pub fn drop_task<T>(task: *mut TaskWrapper<T>) {
-    check_task_ptr(task);
+pub fn poll_task<T>(raw_task: *const TaskWrapper<T>) -> bool
+where
+    T: 'static,
+{
+    check_task_ptr(raw_task);
 
     unsafe {
-        drop(Box::from_raw(task))
+        raw_task.as_ref().unwrap().inner.is_finished()
     }
 }
 
-pub fn await_task<T>(task: *mut TaskWrapper<T>, f: fn(inner: T) -> NativeReturn) -> NativeReturn where T: 'static {
-    check_task_ptr(task);
-    let task = read_task_mut(task);
+pub fn await_task<T>(
+    raw_task: *mut TaskWrapper<T>,
+    f: fn(inner: T) -> NativeReturn,
+) -> NativeReturn {
+    check_task_ptr(raw_task);
+    let task = unsafe { Box::from_raw(raw_task) };
 
-    let inner = runtime().block_on(task.inner.take().unwrap()).unwrap();
-    drop_task(task);
+    let inner = runtime()
+        .block_on(ManuallyDrop::into_inner(task.inner))
+        .unwrap();
 
     f(inner)
 }
 
-pub fn cancel_task<T>(task: *mut TaskWrapper<T>) where T: 'static {
-    check_task_ptr(task);
-    read_task_mut(task).inner.take().unwrap().abort();
-    unsafe {
-        drop(Box::from_raw(task))
-    }
+pub fn cancel_task<T>(raw_task: *mut TaskWrapper<T>)
+where
+    T: 'static,
+{
+    check_task_ptr(raw_task);
+    let task = unsafe { Box::from_raw(raw_task) };
+    task.inner.abort();
 }

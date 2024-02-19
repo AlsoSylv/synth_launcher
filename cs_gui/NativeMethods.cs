@@ -88,6 +88,50 @@ namespace CsBindgen
         [DllImport(__DllName, EntryPoint = "cancel_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern void cancel_asset_index(TaskWrapper* raw_task);
 
+        /// <summary># Safety Total and Finished will be treated like atomics</summary>
+        [DllImport(__DllName, EntryPoint = "get_libraries", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern TaskWrapper* get_libraries(ulong* total, ulong* finished);
+
+        [DllImport(__DllName, EntryPoint = "poll_libraries", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool poll_libraries(TaskWrapper* raw_task);
+
+        [DllImport(__DllName, EntryPoint = "await_libraries", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern NativeReturn await_libraries(TaskWrapper* raw_task);
+
+        [DllImport(__DllName, EntryPoint = "cancel_libraries", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void cancel_libraries(TaskWrapper* raw_task);
+
+        /// <summary># Safety Total and Finished will be treated like atomics</summary>
+        [DllImport(__DllName, EntryPoint = "get_assets", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern TaskWrapper* get_assets(ulong* total, ulong* finished);
+
+        [DllImport(__DllName, EntryPoint = "poll_assets", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool poll_assets(TaskWrapper* raw_task);
+
+        [DllImport(__DllName, EntryPoint = "await_assets", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern NativeReturn await_assets(TaskWrapper* raw_task);
+
+        [DllImport(__DllName, EntryPoint = "cancel_assets", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void cancel_assets(TaskWrapper* raw_task);
+
+        [DllImport(__DllName, EntryPoint = "get_jar", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern TaskWrapper* get_jar(ulong* total, ulong* finished);
+
+        [DllImport(__DllName, EntryPoint = "poll_jar", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool poll_jar(TaskWrapper* raw_task);
+
+        [DllImport(__DllName, EntryPoint = "await_jar", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern NativeReturn await_jar(TaskWrapper* raw_task);
+
+        [DllImport(__DllName, EntryPoint = "cancel_jar", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void cancel_jar(TaskWrapper* raw_task);
+
+        [DllImport(__DllName, EntryPoint = "play", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void play();
+
         [DllImport(__DllName, EntryPoint = "get_device_response", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern TaskWrapper* get_device_response();
 

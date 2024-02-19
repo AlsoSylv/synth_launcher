@@ -148,6 +148,32 @@ internal static class SafeNativeMethods {
     public static string GetUrl() {
         return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_url()));
     }
+    
+    // I need pointers dammit
+    public static unsafe Task GetAssets(ulong* totalAssets, ulong* finishedAssets) =>
+        Task.Run(() => {
+            var assetTask = NativeMethods.get_assets(totalAssets, finishedAssets);
+            while (!NativeMethods.poll_assets(assetTask)) { }
+
+            NativeMethods.await_assets(assetTask);
+        });
+    
+    // I need pointers dammit
+    public static unsafe Task GetLibraries(ulong* totalLibraries, ulong* finishedLibraries) =>
+        Task.Run(() => {
+            var libraryTask = NativeMethods.get_libraries(totalLibraries, finishedLibraries);
+            while (!NativeMethods.poll_libraries(libraryTask)) { }
+
+            NativeMethods.await_libraries(libraryTask);
+        });
+    
+    public static unsafe Task GetJar(ulong* totalJarBytes, ulong* finishedJarBytes) =>
+        Task.Run(() => {
+            var libraryTask = NativeMethods.get_jar(totalJarBytes, finishedJarBytes);
+            while (!NativeMethods.poll_jar(libraryTask)) { }
+
+            NativeMethods.await_jar(libraryTask);
+        });
 }
 
 internal class RustException(NativeReturn value)

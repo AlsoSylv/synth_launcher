@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using CsBindgen;
 
 namespace cs_gui;
 
@@ -22,6 +23,9 @@ public partial class MainWindow : Window
         var task = SafeNativeMethods.GetManifest();
 
         VersionSelectBox.IsEnabled = false;
+        LibraryProgressBar.Minimum = 0;
+        LibraryProgressBar.Maximum = 1;
+        LibraryProgressBar.ShowProgressText = true;
 
         Dispatcher.UIThread.InvokeAsync(async () =>
         {
@@ -78,6 +82,25 @@ public partial class MainWindow : Window
             window.Show();
 
             window.Closed += delegate { LoginButton.IsEnabled = true; };
+        });
+    }
+
+    private void PlayButton_OnClick(object? sender, RoutedEventArgs e) {
+        Dispatcher.UIThread.InvokeAsync(async () => {
+            ulong total = 0;
+            ulong finished = 0;
+            await _versionTask!;
+            Task assetTask;
+            unsafe {
+                assetTask = SafeNativeMethods.GetAssets(&total, &finished);
+            }
+            while (!assetTask.IsCompleted) {
+                if (total != 0) {
+                    LibraryProgressBar.Value = finished / (double) total;
+                }
+                await Task.Delay(100);
+            }
+            LibraryProgressBar.Value = 1;
         });
     }
 }
