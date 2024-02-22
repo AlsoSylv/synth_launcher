@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::account::types::ProfileResult;
 use serde_json::json;
 
 use super::types;
@@ -119,13 +120,14 @@ pub async fn minecraft_profile_response(
     access_token: &str,
     client: &reqwest::Client,
 ) -> Result<types::Profile, crate::Error> {
-    Ok(client
+    client
         .get("https://api.minecraftservices.com/minecraft/profile")
         .bearer_auth(access_token)
         .send()
         .await?
-        .json()
-        .await?)
+        .json::<ProfileResult>()
+        .await?
+        .into()
 }
 
 pub async fn minecraft_ownership_response(

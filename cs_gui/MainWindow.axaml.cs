@@ -1,13 +1,11 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
+using System.Collections.ObjectModel;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
-using CsBindgen;
 
 namespace cs_gui;
 
@@ -15,12 +13,21 @@ public partial class MainWindow : Window
 {
     private Task? _versionTask;
     private readonly CancellationTokenSource _token = new();
+    private readonly ObservableCollection<string> _accounts;
+    private SafeNativeMethods _handle;
 
     public MainWindow()
     {
+        _handle = new SafeNativeMethods();
+        _accounts = new ObservableCollection<string>();
+        
         InitializeComponent();
+        var task = _handle.GetManifest();
+        
+        AccountSelector.ItemsSource = _accounts;
 
-        var task = SafeNativeMethods.GetManifest();
+        for (nuint i = 0; i < _handle.AccountLength; i++) _accounts.Add(_handle.GetAccountName(i));
+        
 
         VersionSelectBox.IsEnabled = false;
         LibraryProgressBar.Minimum = 0;
@@ -32,14 +39,14 @@ public partial class MainWindow : Window
             try
             {
                 await task;
-                VersionSelectBox.IsEnabled = true;
-                var list = new List<string>();
-                var len = SafeNativeMethods.ManifestLength();
-
-                for (UIntPtr idx = 0; idx < len; idx++)
-                    list.Add(Encoding.UTF8.GetString(SafeNativeMethods.GetVersionId(idx)));
-
+                var list = new ObservableCollection<string>();
                 VersionSelectBox.ItemsSource = list;
+                var len = _handle.ManifestLength();
+                
+                for (UIntPtr idx = 0; idx < len; idx++)
+                    list.Add(Encoding.UTF8.GetString(_handle.GetVersionId(idx)));
+                
+                VersionSelectBox.IsEnabled = true;
             }
             catch (AggregateException ae)
             {
@@ -58,7 +65,7 @@ public partial class MainWindow : Window
         if (_versionTask == null)
         {
             var index = VersionSelectBox.SelectedIndex;
-            _versionTask = SafeNativeMethods.GetVersion((nuint)index, _token.Token);
+            _versionTask = _handle.GetVersion((nuint)index, _token.Token);
         }
         else
         {
@@ -66,41 +73,64 @@ public partial class MainWindow : Window
             _token.TryReset();
 
             var index = VersionSelectBox.SelectedIndex;
-            _versionTask = SafeNativeMethods.GetVersion((nuint)index, _token.Token);
+            _versionTask = _handle.GetVersion((nuint)index, _token.Token);
         }
     }
 
-    private void Button_OnClick(object? sender, RoutedEventArgs e)
-    {
-        LoginButton.IsEnabled = false;
+    private void Button_OnClick(object? sender, RoutedEventArgs _) {
+        var button = (Button) sender!;
+        button.IsEnabled = false;
 
         Dispatcher.UIThread.InvokeAsync(async () =>
         {
-            await SafeNativeMethods.GetDeviceResponse;
-            var window = new UserCodeWindow(SafeNativeMethods.GetCode(), SafeNativeMethods.GetUrl());
+            await _handle.GetDeviceResponse;
+            var window = new UserCodeWindow(_handle, _handle.GetCode(), _handle.GetUrl());
 
             window.Show();
 
-            window.Closed += delegate { LoginButton.IsEnabled = true; };
+            window.Closed += delegate {
+                _accounts.Add(_handle.GetAccountName(_handle.AccountLength - 1));
+                
+                button.IsEnabled = true;
+            };
         });
     }
 
     private void PlayButton_OnClick(object? sender, RoutedEventArgs e) {
         Dispatcher.UIThread.InvokeAsync(async () => {
-            ulong total = 0;
-            ulong finished = 0;
             await _versionTask!;
-            Task assetTask;
-            unsafe {
-                assetTask = SafeNativeMethods.GetAssets(&total, &finished);
-            }
-            while (!assetTask.IsCompleted) {
-                if (total != 0) {
-                    LibraryProgressBar.Value = finished / (double) total;
+            var assetTask = new AssetTask(ref _handle);
+            while (!assetTask.Task.IsCompleted) {
+                if (assetTask.Total != 0) {
+                    LibraryProgressBar.Value = assetTask.Percentage;
                 }
-                await Task.Delay(100);
+                await Task.Delay(10);
             }
-            LibraryProgressBar.Value = 1;
+            
+            LibraryProgressBar.Value = assetTask.Percentage;
+        });
+    }
+
+    private void AccountSelector_OnSelectionChanged(object? sender, SelectionChangedEventArgs e) {
+        var box = (ComboBox)sender!;
+        var index = (nuint) box.SelectedIndex;
+        if (!_handle.NeedsRefresh(index)) return;
+        
+        box.IsEnabled = false;
+        Dispatcher.UIThread.InvokeAsync(async () => {
+            var refreshTask = _handle.RefreshAccount(index);
+            while (!refreshTask.IsCompleted) {
+                Console.WriteLine("Waiting...");
+                await Task.Delay(10);
+            }
+
+            try {
+                await refreshTask;
+                box.IsEnabled = true;
+            }
+            catch (Exception e) {
+                Console.WriteLine(e);
+            }
         });
     }
 }

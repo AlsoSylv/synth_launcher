@@ -7,8 +7,6 @@ namespace cs_gui;
 
 public class App : Application
 {
-    public Task ManifestTask = SafeNativeMethods.GetManifest();
-    
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);

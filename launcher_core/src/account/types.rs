@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +83,44 @@ pub struct Profile {
     pub capes: Vec<Cape>,
     #[serde(rename = "profileActions")]
     pub profile_actions: HashMap<String, String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileError {
+    pub path: String,
+    pub error_type: String,
+    pub error: String,
+    pub error_message: String,
+    pub developer_message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProfileResult {
+    Ok(Profile),
+    Err(ProfileError),
+}
+
+impl Display for ProfileError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Error: {}, Reason: {}",
+            self.error_message, self.error_message
+        )
+    }
+}
+
+impl Error for ProfileError {}
+
+impl From<ProfileResult> for Result<Profile, crate::Error> {
+    fn from(value: ProfileResult) -> Self {
+        match value {
+            ProfileResult::Ok(p) => Ok(p),
+            ProfileResult::Err(e) => Err(crate::Error::ProfileError(e)),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]

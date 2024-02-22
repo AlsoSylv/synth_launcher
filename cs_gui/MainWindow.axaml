@@ -21,5 +21,13 @@
                 <ProgressBar Name="LibraryProgressBar" ></ProgressBar>
                 
                 <Button Name="PlayButton" Click="PlayButton_OnClick">Player</Button>
+                
+                <ComboBox x:Name="AccountSelector" SelectionChanged="AccountSelector_OnSelectionChanged">
+                        <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="x:String">
+                                        <TextBlock Text="{Binding}"></TextBlock>
+                                </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                </ComboBox>
         </StackPanel>
 </Window>

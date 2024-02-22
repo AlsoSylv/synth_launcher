@@ -27,10 +27,12 @@ pub struct AsyncLauncher {
 }
 
 #[derive(Debug)]
+#[repr(u32)]
 pub enum Error {
     Reqwest(reqwest::Error),
     Tokio(tokio::io::Error),
     SerdeJson(serde_json::Error),
+    ProfileError(account::types::ProfileError),
 }
 
 impl From<reqwest::Error> for Error {
@@ -53,10 +55,11 @@ impl From<serde_json::Error> for Error {
 
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = match self {
-            Error::Reqwest(err) => err.to_string(),
-            Error::Tokio(err) => err.to_string(),
-            Error::SerdeJson(err) => err.to_string(),
+        let str: &dyn Display = match self {
+            Error::Reqwest(err) => err,
+            Error::Tokio(err) => err,
+            Error::SerdeJson(err) => err,
+            Error::ProfileError(err) => err,
         };
         write!(f, "{}", str)
     }

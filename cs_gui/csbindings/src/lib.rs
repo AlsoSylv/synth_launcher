@@ -1,91 +1,97 @@
 mod tasks;
 
-use crate::state::state_mut;
+use crate::state::State;
 use crate::tasks::{
-    await_task, cancel_task, get_task, poll_task, ManifestTask, ManifestTaskWrapper,
-    TaskWrapper,
+    await_task, cancel_task, get_task, poll_task, ManifestTask, ManifestTaskWrapper, TaskWrapper,
 };
 use launcher_core::account::auth::{
-    authorization_token_response, minecraft_ownership_response, minecraft_profile_response,
-    minecraft_response, xbox_response, xbox_security_token_response,
+    authorization_token_response, minecraft_profile_response,
+    minecraft_response, refresh_token_response, xbox_response, xbox_security_token_response,
 };
-use launcher_core::account::types::{Account, DeviceCodeResponse};
-use launcher_core::types::{AssetIndexJson, VersionJson};
+use launcher_core::account::types::{
+    Account, AuthorizationTokenResponse, DeviceCodeResponse, MinecraftAuthenticationResponse,
+    Profile,
+};
+use launcher_core::types::{AssetIndexJson, Version, VersionJson};
 use launcher_core::{AsyncLauncher, Error};
-use state::state;
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use std::path::PathBuf;
 use std::ptr::null_mut;
+use std::slice;
 use std::sync::atomic::AtomicU64;
-use std::sync::{Once, OnceLock};
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, SystemTime};
 use tokio::runtime::Runtime;
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct LauncherData {
+    jvms: Vec<Jvm>,
+    accounts: Vec<AccRefreshPair>,
+    // instances: Vec<Rc<Instance>>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct AccRefreshPair {
+    account: Account,
+    refresh_token: String,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct Jvm {
+    pub path: String,
+    pub name: String,
+}
+
+pub struct Instance {
+    pub name: String,
+    pub image: Option<PathBuf>,
+    pub version: Arc<Version>,
+    pub path: PathBuf,
+    // pub mod_loader: Option<Loader>,
+    pub jvm_args: Vec<String>,
+    pub env_args: Vec<String>,
+}
+
 mod state {
+    use crate::LauncherData;
     use launcher_core::account::types::DeviceCodeResponse;
     use launcher_core::types::{AssetIndexJson, VersionJson, VersionManifest};
-    use std::cell::Cell;
-    use std::mem::MaybeUninit;
     use std::path::PathBuf;
-    use std::ptr::{addr_of, addr_of_mut};
     use tokio::sync::RwLock;
 
     pub struct State {
-        pub version_manifest: MaybeUninit<RwLock<Option<VersionManifest>>>,
-        pub selected_version: MaybeUninit<RwLock<Option<VersionJson>>>,
-        pub asset_index: MaybeUninit<RwLock<Option<AssetIndexJson>>>,
-        pub class_path: Cell<Option<String>>,
-        pub path: MaybeUninit<PathBuf>,
-        pub device_code: Cell<Option<DeviceCodeResponse>>,
+        pub version_manifest: RwLock<Option<VersionManifest>>,
+        pub selected_version: RwLock<Option<VersionJson>>,
+        pub asset_index: RwLock<Option<AssetIndexJson>>,
+        pub data: RwLock<LauncherData>,
+        pub class_path: Option<String>,
+        pub jar_path: Option<String>,
+        pub path: PathBuf,
+        pub device_code: Option<DeviceCodeResponse>,
     }
 
     impl State {
-        const fn new() -> Self {
+        pub fn new(path_buf: PathBuf) -> Self {
+            let config: LauncherData = toml::de::from_str(
+                &std::fs::read_to_string(path_buf.join("launcher_data.toml")).unwrap(),
+            )
+            .unwrap();
             Self {
-                version_manifest: MaybeUninit::uninit(),
-                selected_version: MaybeUninit::uninit(),
-                asset_index: MaybeUninit::uninit(),
-                class_path: Cell::new(None),
-                path: MaybeUninit::uninit(),
-                device_code: Cell::new(None),
+                version_manifest: empty_lock(),
+                selected_version: empty_lock(),
+                asset_index: empty_lock(),
+                data: RwLock::new(config),
+                class_path: None,
+                jar_path: None,
+                path: path_buf,
+                device_code: None,
             }
-        }
-
-        pub fn init(&mut self, path_buf: PathBuf) {
-            self.path.write(path_buf);
-            self.version_manifest.write(empty_lock());
-            self.selected_version.write(empty_lock());
-            self.asset_index.write(empty_lock());
-        }
-
-        pub fn path(&self) -> &PathBuf {
-            unsafe { state().path.assume_init_ref() }
-        }
-
-        pub fn version_manifest(&self) -> &RwLock<Option<VersionManifest>> {
-            unsafe { self.version_manifest.assume_init_ref() }
-        }
-
-        pub fn selected_version(&self) -> &RwLock<Option<VersionJson>> {
-            unsafe { self.selected_version.assume_init_ref() }
-        }
-
-        pub fn asset_index(&self) -> &RwLock<Option<AssetIndexJson>> {
-            unsafe { self.asset_index.assume_init_ref() }
         }
     }
 
     fn empty_lock<T>() -> RwLock<Option<T>> {
         RwLock::new(None)
-    }
-
-    static mut STATE: State = State::new();
-
-    pub fn state() -> &'static State {
-        unsafe { &*addr_of!(STATE) }
-    }
-
-    pub unsafe fn state_mut() -> &'static mut State {
-        unsafe { &mut *addr_of_mut!(STATE) }
     }
 }
 
@@ -125,29 +131,22 @@ pub enum Code {
     RequestError,
     IOError,
     SerdeError,
+    ProfileError,
 }
 
 impl From<Error> for NativeReturn {
     fn from(value: Error) -> Self {
-        let code: Code;
-        let error: OwnedStringWrapper;
+        let (code, e): (_, &dyn Display) = match &value {
+            Error::Reqwest(e) => (Code::RequestError, e),
+            Error::Tokio(e) => (Code::IOError, e),
+            Error::SerdeJson(e) => (Code::SerdeError, e),
+            Error::ProfileError(e) => (Code::ProfileError, e),
+        };
 
-        match value {
-            Error::Reqwest(e) => {
-                code = Code::RequestError;
-                error = e.to_string().into();
-            }
-            Error::Tokio(e) => {
-                code = Code::IOError;
-                error = e.to_string().into();
-            }
-            Error::SerdeJson(e) => {
-                code = Code::SerdeError;
-                error = e.to_string().into();
-            }
+        Self {
+            code,
+            error: e.to_string().into(),
         }
-
-        Self { code, error }
     }
 }
 
@@ -242,27 +241,20 @@ impl OwnedStringWrapper {
 }
 
 #[no_mangle]
-/// This MUST be called before ANY other native methods are run
 /// # Safety
-/// Path needs to be a valid UTF-16
-/// Len must be the len of the vector length, not the char length
-pub unsafe extern "C" fn init(path: *const u16, len: usize) {
-    static INIT: Once = Once::new();
-    assert!(!path.is_null());
-
-    INIT.call_once(|| {
-        let path = String::from_utf16(std::slice::from_raw_parts(path, len)).unwrap();
-        unsafe {
-            state_mut().init(PathBuf::from(path).join("synth_launcher"));
-        }
-    })
+pub unsafe extern "C" fn new_rust_state(path: *const u16, len: usize) -> *mut State {
+    let path = String::from_utf16(slice::from_raw_parts(path, len)).unwrap();
+    let path = PathBuf::from(path).join("synth_launcher");
+    Box::leak(Box::new(State::new(path)))
 }
 
 #[no_mangle]
-pub extern "C" fn get_version_manifest() -> *mut ManifestTaskWrapper {
+/// # Safety
+pub unsafe extern "C" fn get_version_manifest(state: *mut State) -> *mut ManifestTaskWrapper {
+    let state = &*state;
     get_task(async {
         launcher()
-            .get_version_manifest(&state().path().join("versions"))
+            .get_version_manifest(&state.path.join("versions"))
             .await
     }) as _
 }
@@ -283,10 +275,14 @@ pub extern "C" fn poll_manifest_task(raw_task: *const ManifestTaskWrapper) -> bo
 /// # Safety
 /// # The task wrapper cannot be Null
 /// # The manifest wrapper cannot be null
-pub extern "C" fn await_version_manifest(raw_task: *mut ManifestTaskWrapper) -> NativeReturn {
+pub unsafe extern "C" fn await_version_manifest(
+    state: *mut State,
+    raw_task: *mut ManifestTaskWrapper,
+) -> NativeReturn {
     await_task(raw_task as *mut ManifestTask, |inner| match inner {
         Ok(manifest) => {
-            let mut lock = state().version_manifest().blocking_write();
+            let state = &*state;
+            let mut lock = state.version_manifest.blocking_write();
             *lock = Some(manifest);
             drop(lock);
             NativeReturn::success()
@@ -304,34 +300,44 @@ pub extern "C" fn cancel_version_manifest(task: *mut ManifestTaskWrapper) {
 }
 
 #[no_mangle]
-pub extern "C" fn get_latest_release() -> RefStringWrapper {
-    let manifest = state().version_manifest().blocking_read();
+/// # Safety
+pub unsafe extern "C" fn get_latest_release(state: *mut State) -> RefStringWrapper {
+    let manifest = state.as_ref().unwrap().version_manifest.blocking_read();
 
     RefStringWrapper::from(&manifest.as_ref().unwrap().latest.release)
 }
 
 #[no_mangle]
-pub extern "C" fn get_name(index: usize) -> RefStringWrapper {
-    let manifest = state().version_manifest().blocking_read();
+/// # Safety
+pub unsafe extern "C" fn get_name(state: *mut State, index: usize) -> RefStringWrapper {
+    let manifest = state.as_ref().unwrap().version_manifest.blocking_read();
 
     RefStringWrapper::from(&manifest.as_ref().unwrap().versions[index].id)
 }
 
 #[no_mangle]
-pub extern "C" fn get_manifest_len() -> usize {
-    let manifest = state().version_manifest().blocking_read();
+/// # Safety
+pub unsafe extern "C" fn get_manifest_len(state: *mut State) -> usize {
+    let manifest = state.as_ref().unwrap().version_manifest.blocking_read();
 
     manifest.as_ref().unwrap().versions.len()
 }
 
 #[no_mangle]
-pub extern "C" fn is_manifest_null() -> bool {
-    state().version_manifest().blocking_read().is_none()
+/// # Safety
+pub unsafe extern "C" fn is_manifest_null(state: *mut State) -> bool {
+    state
+        .as_ref()
+        .unwrap()
+        .version_manifest
+        .blocking_read()
+        .is_none()
 }
 
 #[no_mangle]
-pub extern "C" fn get_type(index: usize) -> ReleaseType {
-    let manifest = state().version_manifest().blocking_read();
+/// # Safety
+pub unsafe extern "C" fn get_type(state: *mut State, index: usize) -> ReleaseType {
+    let manifest = state.as_ref().unwrap().version_manifest.blocking_read();
 
     manifest.as_ref().unwrap().versions[index]
         .version_type
@@ -350,13 +356,18 @@ pub unsafe extern "C" fn free_owned_string_wrapper(string_wrapper: OwnedStringWr
 }
 
 #[no_mangle]
-pub extern "C" fn get_version_task(index: usize) -> *mut TaskWrapper<Result<VersionJson, Error>> {
+/// # Safety
+pub unsafe extern "C" fn get_version_task(
+    state: *mut State,
+    index: usize,
+) -> *mut TaskWrapper<Result<VersionJson, Error>> {
+    let state = &*state;
     get_task(async move {
-        let manifest = state().version_manifest().read().await;
+        let manifest = state.version_manifest.read().await;
         if let Some(manifest) = &*manifest {
             let version = &manifest.versions[index];
             launcher()
-                .get_version_json(version, &state().path().join("versions"))
+                .get_version_json(version, &state.path.join("versions"))
                 .await
         } else {
             panic!("Guh")
@@ -377,11 +388,13 @@ pub unsafe extern "C" fn poll_version_task(
 #[no_mangle]
 /// # Safety
 pub unsafe extern "C" fn await_version_task(
+    state: *mut State,
     raw_task: *mut TaskWrapper<Result<VersionJson, Error>>,
 ) -> NativeReturn {
+    let state = &*state;
     await_task(raw_task, |inner| match inner {
         Ok(version) => {
-            let mut writer = state().selected_version().blocking_write();
+            let mut writer = state.selected_version.blocking_write();
             *writer = Some(version);
             drop(writer);
             NativeReturn::success()
@@ -400,10 +413,14 @@ pub unsafe extern "C" fn cancel_version_task(
 }
 
 #[no_mangle]
-pub extern "C" fn get_asset_index() -> *mut TaskWrapper<Result<AssetIndexJson, Error>> {
+/// # Safety
+pub unsafe extern "C" fn get_asset_index(
+    state: *mut State,
+) -> *mut TaskWrapper<Result<AssetIndexJson, Error>> {
+    let state = &*state;
     get_task(async move {
-        let version = state().selected_version();
-        let path = state().path();
+        let version = &state.selected_version;
+        let path = &state.path;
         let tmp = version.read().await;
         let version = tmp.as_ref().unwrap();
         launcher()
@@ -423,11 +440,13 @@ pub extern "C" fn poll_asset_index(
 #[no_mangle]
 /// # Safety
 pub unsafe extern "C" fn await_asset_index(
+    state: *mut State,
     raw_task: *mut TaskWrapper<Result<AssetIndexJson, Error>>,
 ) -> NativeReturn {
+    let state = &*state;
     await_task(raw_task, |inner| match inner {
         Ok(version) => {
-            let mut writer = state().asset_index().blocking_write();
+            let mut writer = state.asset_index.blocking_write();
             *writer = Some(version);
             drop(writer);
             NativeReturn::success()
@@ -448,19 +467,21 @@ pub unsafe extern "C" fn cancel_asset_index(
 /// # Safety
 /// Total and Finished will be treated like atomics
 pub unsafe extern "C" fn get_libraries(
+    state: *mut State,
     total: *mut u64,
     finished: *mut u64,
 ) -> *mut TaskWrapper<Result<String, Error>> {
+    let state = &*state;
     let total = AtomicU64::from_ptr(total);
     let finished = AtomicU64::from_ptr(finished);
     get_task(async move {
-        let binding = state().selected_version().read().await;
+        let binding = state.selected_version.read().await;
         let version = binding.as_ref().unwrap();
         launcher()
             .download_libraries_and_get_path(
                 version.libraries(),
-                &state().path().join("libraries"),
-                &state().path().join("natives"),
+                &state.path.join("libraries"),
+                &state.path.join("natives"),
                 total,
                 finished,
             )
@@ -474,10 +495,15 @@ pub extern "C" fn poll_libraries(raw_task: *const TaskWrapper<Result<String, Err
 }
 
 #[no_mangle]
-pub extern "C" fn await_libraries(raw_task: *mut TaskWrapper<Result<String, Error>>) -> NativeReturn {
+/// # Safety
+pub unsafe extern "C" fn await_libraries(
+    state: *mut State,
+    raw_task: *mut TaskWrapper<Result<String, Error>>,
+) -> NativeReturn {
     await_task(raw_task, |inner| match inner {
         Ok(class_path) => {
-            state().class_path.set(Some(class_path));
+            let state = &mut *state;
+            state.class_path = Some(class_path);
             NativeReturn::success()
         }
         Err(e) => e.into(),
@@ -493,18 +519,20 @@ pub extern "C" fn cancel_libraries(raw_task: *mut TaskWrapper<Result<(), Error>>
 /// # Safety
 /// Total and Finished will be treated like atomics
 pub unsafe extern "C" fn get_assets(
+    state: *mut State,
     total: *mut u64,
     finished: *mut u64,
 ) -> *mut TaskWrapper<Result<(), Error>> {
+    let state = &*state;
     let total = AtomicU64::from_ptr(total);
     let finished = AtomicU64::from_ptr(finished);
     get_task(async move {
-        let binding = state().asset_index().read().await;
+        let binding = state.asset_index.read().await;
         let asset_index = binding.as_ref().unwrap();
         launcher()
             .download_and_store_asset_index(
                 asset_index,
-                &state().path().join("assets"),
+                &state.path.join("assets"),
                 total,
                 finished,
             )
@@ -534,17 +562,20 @@ pub extern "C" fn cancel_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) {
 }
 
 #[no_mangle]
+/// # Safety
 pub unsafe extern "C" fn get_jar(
+    state: *mut State,
     total: *mut u64,
     finished: *mut u64,
 ) -> *mut TaskWrapper<Result<String, Error>> {
+    let state = &*state;
     let total = AtomicU64::from_ptr(total);
     let finished = AtomicU64::from_ptr(finished);
     get_task(async move {
-        let binding = state().selected_version().read().await;
+        let binding = &state.selected_version.read().await;
         let version = binding.as_ref().unwrap();
         launcher()
-            .download_jar(version, &state().path().join("versions"), total, finished)
+            .download_jar(version, &state.path.join("versions"), total, finished)
             .await
     })
 }
@@ -555,8 +586,15 @@ pub extern "C" fn poll_jar(raw_task: *mut TaskWrapper<Result<String, Error>>) ->
 }
 
 #[no_mangle]
-pub extern "C" fn await_jar(raw_task: *mut TaskWrapper<Result<String, Error>>) -> NativeReturn {
-    await_task(raw_task, |inner| todo!())
+/// # Safety
+pub unsafe extern "C" fn await_jar(state: *mut State, raw_task: *mut TaskWrapper<Result<String, Error>>) -> NativeReturn {
+    await_task(raw_task, |inner| match inner {
+        Ok(path) => {
+            (*state).jar_path = Some(path);
+            NativeReturn::success()
+        }
+        Err(e) => e.into()
+    })
 }
 
 #[no_mangle]
@@ -587,11 +625,13 @@ pub unsafe extern "C" fn poll_device_response(
 #[no_mangle]
 /// # Safety
 pub unsafe extern "C" fn await_device_response(
+    state: *mut State,
     raw_task: *mut TaskWrapper<Result<DeviceCodeResponse, Error>>,
 ) -> NativeReturn {
     await_task(raw_task, |inner| match inner {
         Ok(response) => {
-            state().device_code.set(Some(response));
+            let state = &mut *state;
+            state.device_code = Some(response);
 
             NativeReturn::success()
         }
@@ -600,8 +640,10 @@ pub unsafe extern "C" fn await_device_response(
 }
 
 #[no_mangle]
-pub extern "C" fn get_user_code() -> RefStringWrapper {
-    if let Some(code) = unsafe { &*state().device_code.as_ptr() } {
+/// # Safety
+pub unsafe extern "C" fn get_user_code(state: *mut State) -> RefStringWrapper {
+    let state = &*state;
+    if let Some(code) = &state.device_code {
         code.user_code.as_str().into()
     } else {
         panic!()
@@ -609,8 +651,10 @@ pub extern "C" fn get_user_code() -> RefStringWrapper {
 }
 
 #[no_mangle]
-pub extern "C" fn get_url() -> RefStringWrapper {
-    if let Some(code) = unsafe { &*state().device_code.as_ptr() } {
+/// # Safety
+pub unsafe extern "C" fn get_url(state: *mut State) -> RefStringWrapper {
+    let state = &*state;
+    if let Some(code) = &state.device_code {
         code.verification_uri.as_str().into()
     } else {
         panic!()
@@ -618,28 +662,55 @@ pub extern "C" fn get_url() -> RefStringWrapper {
 }
 
 #[no_mangle]
-pub extern "C" fn start_auth_loop() -> *mut TaskWrapper<Result<Account, Error>> {
+/// # Safety
+pub unsafe extern "C" fn start_auth_loop(
+    state: *mut State,
+) -> *mut TaskWrapper<Result<AccRefreshPair, Error>> {
+    let state = &*state;
     get_task(async {
-        let device_response = unsafe { &*state().device_code.as_ptr() }.as_ref().unwrap();
-        auth_loop(device_response).await
+        let device_response = state.device_code.as_ref().unwrap();
+        let auth_res = loop {
+            let device_code = &device_response.device_code;
+            let auth_hook = authorization_token_response(client(), device_code, CLIENT_ID).await;
+            if let Ok(t) = auth_hook {
+                break t;
+            }
+        };
+        auth(auth_res).await
     })
 }
 
 #[no_mangle]
 /// # Safety
-pub extern "C" fn poll_auth_loop(raw_task: *mut TaskWrapper<Result<Account, Error>>) -> bool {
+pub extern "C" fn poll_auth_loop(
+    raw_task: *mut TaskWrapper<Result<AccRefreshPair, Error>>,
+) -> bool {
     poll_task(raw_task)
 }
 
 #[no_mangle]
 /// # Safety
 pub unsafe extern "C" fn await_auth_loop(
-    raw_task: *mut TaskWrapper<Result<Account, Error>>,
+    state: *mut State,
+    raw_task: *mut TaskWrapper<Result<AccRefreshPair, Error>>,
 ) -> NativeReturn {
     await_task(raw_task, |inner| match inner {
-        Ok(_response) => {
-            todo!("Store Account In Memory");
+        Ok(response) => {
+            let state = &mut *state;
+            let mut guard = state.data.blocking_write();
+            for account in &mut guard.accounts {
+                if account.account.profile.id == response.account.profile.id {
+                    *account = response;
+                    return NativeReturn::success();
+                }
+            }
 
+            guard.accounts.push(response);
+            std::fs::write(
+                state.path.join("launcher_data.toml"),
+                toml::to_string_pretty(&*guard).unwrap().as_bytes(),
+            )
+            .unwrap();
             NativeReturn::success()
         }
         Err(e) => e.into(),
@@ -648,19 +719,150 @@ pub unsafe extern "C" fn await_auth_loop(
 
 #[no_mangle]
 /// # Safety
-pub unsafe extern "C" fn cancel_auth_loop(raw_task: *mut TaskWrapper<Result<Account, Error>>) {
+pub unsafe extern "C" fn cancel_auth_loop(
+    raw_task: *mut TaskWrapper<Result<AccRefreshPair, Error>>,
+) {
     cancel_task(raw_task)
 }
 
-async fn auth_loop(device_response: &DeviceCodeResponse) -> Result<Account, Error> {
-    let auth_res = loop {
-        let device_code = &device_response.device_code;
-        let auth_hook = authorization_token_response(client(), device_code, CLIENT_ID).await;
-        if let Ok(t) = auth_hook {
-            break t;
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn try_refresh(
+    state: *mut State,
+    index: usize,
+) -> *mut TaskWrapper<Result<(AccRefreshPair, usize), Error>> {
+    let state = &*state;
+    get_task(async move {
+        let guard = state.data.read().await;
+        let profile = &guard.accounts[index];
+
+        let refresh = refresh_token_response(client(), &profile.refresh_token, CLIENT_ID)
+            .await?
+            .into();
+        auth(refresh).await.map(|a| (a, index))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn poll_refresh(
+    raw_task: *mut TaskWrapper<Result<(AccRefreshPair, usize), Error>>,
+) -> bool {
+    poll_task(raw_task)
+}
+
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn await_refresh(
+    state: *mut State,
+    raw_task: *mut TaskWrapper<Result<(AccRefreshPair, usize), Error>>,
+) -> NativeReturn {
+    await_task(raw_task, |inner| match inner {
+        Ok((new_profile, idx)) => {
+            let state = &mut *state;
+            state.data.blocking_write().accounts[idx] = new_profile;
+            let read = state.data.blocking_read();
+            std::fs::write(
+                state.path.join("launcher_data.toml"),
+                toml::to_string_pretty(&*read).unwrap().as_bytes(),
+            )
+            .unwrap();
+            NativeReturn::success()
         }
+        Err(e) => e.into(),
+    })
+}
+
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn accounts_len(state: *mut State) -> usize {
+    (*state).data.blocking_read().accounts.len()
+}
+
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn remove_account(state: *mut State, index: usize) {
+    (*state).data.blocking_write().accounts.remove(index);
+}
+
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn get_account_name(state: *mut State, index: usize) -> RefStringWrapper {
+    (*state).data.blocking_read().accounts[index]
+        .account
+        .profile
+        .name
+        .as_str()
+        .into()
+}
+
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn needs_refresh(state: *mut State, index: usize) -> bool {
+    let state = &*state;
+    state.data.blocking_read().accounts[index].account.expiry
+        <= SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn jvm_len(state: *mut State) -> usize {
+    (*state).data.blocking_read().jvms.len()
+}
+
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn jvm_name(state: *mut State, index: usize) -> RefStringWrapper {
+    (*state).data.blocking_read().jvms[index]
+        .name
+        .as_str()
+        .into()
+}
+
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn add_jvm(state: *mut State, ptr: *const u16, len: usize) {
+    let string = String::from_utf16(slice::from_raw_parts(ptr, len)).unwrap();
+    let (vendor, version) = get_vendor_major_version(&string);
+    (*state).data.blocking_write().jvms.push(Jvm { path: string, name: format!("{vendor} {version}") })
+}
+
+fn get_vendor_major_version(jvm: &str) -> (String, u32) {
+    /// Compiled Java byte-code to check for the current Java Version
+    /// Source can be found in VersionPrinter.java
+    const CHECKER_CLASS: &[u8] = include_bytes!("VersionPrinter.class");
+
+    let tmp = std::env::temp_dir();
+    let checker_class_file = tmp.join("VersionPrinter.class");
+    std::fs::write(checker_class_file, CHECKER_CLASS).unwrap();
+    let io = std::process::Command::new(jvm)
+        .env_clear()
+        .current_dir(tmp)
+        .args(["-DFile.Encoding=UTF-8", "VersionPrinter"])
+        .output()
+        .unwrap();
+
+    let string = String::from_utf8_lossy(&io.stdout);
+
+    let (version, name) = unsafe { string.split_once('\n').unwrap_unchecked() };
+
+    let mut split = version.split('.');
+    let next = split.next().unwrap();
+    let version = if next == "1" {
+        split.next().unwrap()
+    } else {
+        next
     };
 
+    let name = name.to_string();
+    let version = version.parse().unwrap_or(0);
+
+    (name, version)
+}
+
+async fn auth(auth_res: AuthorizationTokenResponse) -> Result<AccRefreshPair, Error> {
     let xbox_response = xbox_response(client(), &auth_res.access_token).await?;
 
     let xbox_secure_token_res =
@@ -670,16 +872,19 @@ async fn auth_loop(device_response: &DeviceCodeResponse) -> Result<Account, Erro
     let token = &xbox_secure_token_res.token;
     let mc_res = minecraft_response(claims, token, client()).await?;
 
-    let ownership_check = minecraft_ownership_response(&mc_res.access_token, client()).await?;
-
-    if ownership_check.items.is_empty() {
-        todo!("Is this worth checking?")
-    }
+    // This is literally not worth checking lol, the next endpoint will do it but better
+    // let ownership_check = minecraft_ownership_response(&mc_res.access_token, client()).await?;
 
     let profile = minecraft_profile_response(&mc_res.access_token, client()).await?;
 
-    use std::time::SystemTime;
+    Ok(profile_to_account(profile, auth_res, mc_res))
+}
 
+fn profile_to_account(
+    profile: Profile,
+    auth_res: AuthorizationTokenResponse,
+    mc_res: MinecraftAuthenticationResponse,
+) -> AccRefreshPair {
     let expires_in = Duration::from_secs(auth_res.expires_in);
     let system_time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -693,5 +898,8 @@ async fn auth_loop(device_response: &DeviceCodeResponse) -> Result<Account, Erro
         profile,
     };
 
-    Ok(account)
+    AccRefreshPair {
+        account,
+        refresh_token: auth_res.refresh_token,
+    }
 }

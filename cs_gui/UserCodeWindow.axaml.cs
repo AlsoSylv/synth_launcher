@@ -12,8 +12,10 @@ public partial class UserCodeWindow : Window {
     private readonly string _userCode;
     private readonly string _verificationUrl;
     private readonly CancellationTokenSource _cancelToken = new ();
+    private readonly SafeNativeMethods _handle;
     
-    public UserCodeWindow(string userCode, string verificationUrl) {
+    public UserCodeWindow(SafeNativeMethods handle, string userCode, string verificationUrl) {
+        _handle = handle;
         _userCode = userCode;
         _verificationUrl = verificationUrl;
 
@@ -52,7 +54,7 @@ public partial class UserCodeWindow : Window {
         };
 
         Dispatcher.UIThread.InvokeAsync(async () => {
-            await SafeNativeMethods.Auth(_cancelToken.Token);
+            await _handle.Auth(_cancelToken.Token);
             Close();
         });
     }

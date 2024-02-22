@@ -1022,7 +1022,9 @@ dependencies = [
  "futures",
  "launcher_core",
  "reqwest",
+ "serde",
  "tokio",
+ "toml",
 ]
 
 [[package]]

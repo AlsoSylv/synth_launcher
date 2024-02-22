@@ -53,14 +53,12 @@ where
 {
     check_task_ptr(raw_task);
 
-    unsafe {
-        raw_task.as_ref().unwrap().inner.is_finished()
-    }
+    unsafe { raw_task.as_ref().unwrap().inner.is_finished() }
 }
 
-pub fn await_task<T>(
+pub fn await_task<T, F: Fn(T) -> NativeReturn>(
     raw_task: *mut TaskWrapper<T>,
-    f: fn(inner: T) -> NativeReturn,
+    f: F,
 ) -> NativeReturn {
     check_task_ptr(raw_task);
     let task = unsafe { Box::from_raw(raw_task) };

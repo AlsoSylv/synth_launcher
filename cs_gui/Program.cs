@@ -13,14 +13,6 @@ internal static class Program {
     // yet and stuff might break.
     [STAThread]
     public static void Main(string[] args) {
-        unsafe {
-            var path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-
-            fixed (char* ptr = path) {
-                NativeMethods.init((ushort*)ptr, (nuint)path.Length);
-            }
-        }
-
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 
@@ -47,14 +39,187 @@ internal static class Program {
     }
 }
 
-internal static class SafeNativeMethods {
-    public static Task GetManifest() =>
+public class AssetTask {
+    private ulong _total = 0;
+    private ulong _finished = 0;
+    private readonly unsafe State* _state;
+    public Task Task { get; private set; }
+
+    public AssetTask(ref SafeNativeMethods state) {
+        unsafe {
+            _state = state.State;
+        }
+        Task = Task.Run(GetAssets);
+        return;
+
+        unsafe void GetAssets() {
+            fixed (ulong* total = &_total, finished = &_finished) {
+                var assetTask = NativeMethods.get_assets(_state, total, finished);
+                while (!NativeMethods.poll_assets(assetTask)) { }
+
+                var v = NativeMethods.await_assets(assetTask);
+                
+                if (v.code != Code.Success) throw new RustException(v);
+            }
+        }
+    }
+
+    public AssetTask(ref SafeNativeMethods state, CancellationToken token) {
+        unsafe {
+            _state = state.State;
+        }
+        Task = Task.Run(GetAssets, token);
+        return;
+
+        unsafe void GetAssets() {
+            fixed (ulong* total = &_total, finished = &_finished) {
+                var assetTask = NativeMethods.get_assets(_state, total, finished);
+                while (!NativeMethods.poll_assets(assetTask)) {
+                    if (!token.IsCancellationRequested) continue;
+                    NativeMethods.cancel_assets(assetTask);
+                    token.ThrowIfCancellationRequested();
+                }
+
+                var v = NativeMethods.await_assets(assetTask);
+                
+                if (v.code != Code.Success) throw new RustException(v);
+            }
+        }
+    }
+
+    public ulong Total => _total;
+    public ulong Finished => _finished;
+
+    public double Percentage => (double) _finished / _total;
+}
+
+public class LibrariesTask {
+    private ulong _total = 0;
+    private ulong _finished = 0;
+    private readonly unsafe State* _state;
+    public Task Task { get; private set; }
+
+    public LibrariesTask(ref SafeNativeMethods state) {
+        unsafe {
+            _state = state.State;
+        }
+        Task = Task.Run(GetLibraries);
+        return;
+
+        unsafe void GetLibraries() {
+            fixed (ulong* total = &_total, finished = &_finished) {
+                var assetTask = NativeMethods.get_libraries(_state, total, finished);
+                while (!NativeMethods.poll_libraries(assetTask)) { }
+
+                var v = NativeMethods.await_libraries(_state, assetTask);
+                
+                if (v.code != Code.Success) throw new RustException(v);
+            }
+        }
+    }
+
+    public LibrariesTask(ref SafeNativeMethods state, CancellationToken token) {
+        unsafe {
+            _state = state.State;
+        }
+        Task = Task.Run(GetLibraries, token);
+        return;
+
+        unsafe void GetLibraries() {
+            fixed (ulong* total = &_total, finished = &_finished) {
+                var assetTask = NativeMethods.get_libraries(_state, total, finished);
+                while (!NativeMethods.poll_libraries(assetTask)) {
+                    if (!token.IsCancellationRequested) continue;
+                    NativeMethods.cancel_libraries(assetTask);
+                    token.ThrowIfCancellationRequested();
+                }
+
+                var v = NativeMethods.await_libraries(_state, assetTask);
+                
+                if (v.code != Code.Success) throw new RustException(v);
+            }
+        }
+    }
+
+    public ulong Total => _total;
+    public ulong Finished => _finished;
+
+    public double Percentage => (double) _finished / _total;
+}
+
+public class JarTask {
+    private ulong _total = 0;
+    private ulong _finished = 0;
+    private readonly unsafe State* _state;
+    public Task Task { get; private set; }
+
+    public JarTask(ref SafeNativeMethods state) {
+        unsafe {
+            _state = state.State;
+        }
+        Task = Task.Run(GetJar);
+        return;
+
+        unsafe void GetJar() {
+            fixed (ulong* total = &_total, finished = &_finished) {
+                var assetTask = NativeMethods.get_jar(_state, total, finished);
+                while (!NativeMethods.poll_jar(assetTask)) { }
+
+                var v = NativeMethods.await_jar(_state, assetTask);
+                
+                if (v.code != Code.Success) throw new RustException(v);
+            }
+        }
+    }
+
+    public JarTask(ref SafeNativeMethods state, CancellationToken token) {
+        unsafe {
+            _state = state.State;
+        }
+        Task = Task.Run(GetJar, token);
+        return;
+
+        unsafe void GetJar() {
+            fixed (ulong* total = &_total, finished = &_finished) {
+                var assetTask = NativeMethods.get_jar(_state, total, finished);
+                while (!NativeMethods.poll_jar(assetTask)) {
+                    if (!token.IsCancellationRequested) continue;
+                    NativeMethods.cancel_jar(assetTask);
+                    token.ThrowIfCancellationRequested();
+                }
+
+                var v = NativeMethods.await_jar(_state, assetTask);
+                
+                if (v.code != Code.Success) throw new RustException(v);
+            }
+        }
+    }
+
+    public ulong Total => _total;
+    public ulong Finished => _finished;
+
+    public double Percentage => (double) _finished / _total;
+}
+
+public class SafeNativeMethods {
+    internal readonly unsafe State* State;
+
+    public SafeNativeMethods() {
+        var path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        unsafe {
+            fixed (char* utf16Ptr = path) {
+                State = NativeMethods.new_rust_state((ushort*) utf16Ptr, (nuint) path.Length);
+            }
+        }
+    }
+    
+    public Task GetManifest() =>
         Task.Run(() => {
             unsafe {
-                var taskPointer = NativeMethods.get_version_manifest();
+                var taskPointer = NativeMethods.get_version_manifest(State);
                 while (!NativeMethods.poll_manifest_task(taskPointer)) { }
 
-                var value = NativeMethods.await_version_manifest(taskPointer);
+                var value = NativeMethods.await_version_manifest(State, taskPointer);
 
                 if (value.code != Code.Success) {
                     throw new RustException(value);
@@ -62,49 +227,69 @@ internal static class SafeNativeMethods {
             }
         });
 
-    public static bool IsManifestNull() => NativeMethods.is_manifest_null();
+    public bool IsManifestNull() {
+        unsafe {
+            return NativeMethods.is_manifest_null(State);
+        }
+    }
 
-    public static ReadOnlySpan<byte> GetLatestRelease() => Program.CopyRefString(NativeMethods.get_latest_release());
+    public ReadOnlySpan<byte> GetLatestRelease() {
+        unsafe {
+            return Program.CopyRefString(NativeMethods.get_latest_release(State));
+        }
+    }
 
-    public static nuint ManifestLength() => NativeMethods.get_manifest_len();
+    public nuint ManifestLength() {
+        unsafe {
+            return NativeMethods.get_manifest_len(State);
+        }
+    }
 
-    public static ReadOnlySpan<byte> GetVersionId(nuint index) => Program.CopyRefString(NativeMethods.get_name(index));
+    public ReadOnlySpan<byte> GetVersionId(nuint index) {
+        unsafe {
+            return Program.CopyRefString(NativeMethods.get_name(State, index));
+        }
+    }
 
-    public static ReleaseType GetVersionType(nuint index) => NativeMethods.get_type(index);
+    public ReleaseType GetVersionType(nuint index) {
+        unsafe {
+            return NativeMethods.get_type(State, index);
+        }
+    }
 
-    public static Task GetVersion(nuint index, CancellationToken token) =>
+    public Task GetVersion(nuint index, CancellationToken token) =>
         Task.Run(() => {
             unsafe {
                 token.ThrowIfCancellationRequested();
-                var versionTaskPointer = NativeMethods.get_version_task(index);
+                var versionTaskPointer = NativeMethods.get_version_task(State, index);
                 while (!NativeMethods.poll_version_task(versionTaskPointer)) {
                     if (!token.IsCancellationRequested) continue;
                     NativeMethods.cancel_version_task(versionTaskPointer);
                     token.ThrowIfCancellationRequested();
                 }
 
-                var value = NativeMethods.await_version_task(versionTaskPointer);
+                var value = NativeMethods.await_version_task(State, versionTaskPointer);
                 if (value.code != Code.Success) throw new RustException(value);
 
                 if (token.IsCancellationRequested) return;
 
-                var assetIndexTaskPointer = NativeMethods.get_asset_index();
+                var assetIndexTaskPointer = NativeMethods.get_asset_index(State);
                 while (!NativeMethods.poll_asset_index(assetIndexTaskPointer)) {
                     if (!token.IsCancellationRequested) continue;
                     NativeMethods.cancel_asset_index(assetIndexTaskPointer);
                     token.ThrowIfCancellationRequested();
                 }
 
-                var v = NativeMethods.await_asset_index(assetIndexTaskPointer);
+                var v = NativeMethods.await_asset_index(State, assetIndexTaskPointer);
                 if (v.code != Code.Success) throw new RustException(v);
             }
         }, token);
     
-    public static Task Auth(CancellationToken token) =>
+    public Task Auth(CancellationToken token) =>
         Task.Run(() => {
             unsafe {
                 if (token.IsCancellationRequested) token.ThrowIfCancellationRequested();
-                var taskPointer = NativeMethods.start_auth_loop();
+                var taskPointer = NativeMethods.start_auth_loop(State);
                 while (!NativeMethods.poll_auth_loop(taskPointer)) {
                     try
                     {
@@ -123,7 +308,7 @@ internal static class SafeNativeMethods {
                     token.ThrowIfCancellationRequested();
                 }
 
-                var value = NativeMethods.await_auth_loop(taskPointer);
+                var value = NativeMethods.await_auth_loop(State, taskPointer);
 
                 if (value.code != Code.Success) {
                     throw new RustException(value);
@@ -131,49 +316,58 @@ internal static class SafeNativeMethods {
             }
         }, token);
 
-    public static Task GetDeviceResponse => Task.Run(() => {
+    public Task GetDeviceResponse => Task.Run(() => {
         unsafe {
             var responseTask = NativeMethods.get_device_response();
             while (!NativeMethods.poll_device_response(responseTask)) { }
 
-            var response = NativeMethods.await_device_response(responseTask);
+            var response = NativeMethods.await_device_response(State, responseTask);
             if (response.code != Code.Success) throw new RustException(response);
         }
     });
 
-    public static string GetCode() {
-        return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_user_code()));
+    public string GetCode() {
+        unsafe {
+            return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_user_code(State)));
+        }
     }
     
-    public static string GetUrl() {
-        return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_url()));
+    public string GetUrl() {
+        unsafe {
+            return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_url(State)));
+        }
     }
-    
-    // I need pointers dammit
-    public static unsafe Task GetAssets(ulong* totalAssets, ulong* finishedAssets) =>
-        Task.Run(() => {
-            var assetTask = NativeMethods.get_assets(totalAssets, finishedAssets);
-            while (!NativeMethods.poll_assets(assetTask)) { }
 
-            NativeMethods.await_assets(assetTask);
-        });
-    
-    // I need pointers dammit
-    public static unsafe Task GetLibraries(ulong* totalLibraries, ulong* finishedLibraries) =>
-        Task.Run(() => {
-            var libraryTask = NativeMethods.get_libraries(totalLibraries, finishedLibraries);
-            while (!NativeMethods.poll_libraries(libraryTask)) { }
+    public nuint AccountLength {
+        get {
+            unsafe {
+                return NativeMethods.accounts_len(State);
+            }
+        }
+    }
 
-            NativeMethods.await_libraries(libraryTask);
-        });
-    
-    public static unsafe Task GetJar(ulong* totalJarBytes, ulong* finishedJarBytes) =>
-        Task.Run(() => {
-            var libraryTask = NativeMethods.get_jar(totalJarBytes, finishedJarBytes);
-            while (!NativeMethods.poll_jar(libraryTask)) { }
+    public string GetAccountName(nuint index) {
+        unsafe {
+            return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_account_name(State, index)));
+        }
+    }
 
-            NativeMethods.await_jar(libraryTask);
-        });
+    public Task RefreshAccount(nuint index) => Task.Run(() => {
+        unsafe {
+            var task = NativeMethods.try_refresh(State, index);
+            while (!NativeMethods.poll_refresh(task)) { }
+
+            var v = NativeMethods.await_refresh(State, task);
+
+            if (v.code != Code.Success) throw new RustException(v);
+        }
+    });
+
+    public bool NeedsRefresh(nuint index) {
+        unsafe {
+            return NativeMethods.needs_refresh(State, index);
+        }
+    }
 }
 
 internal class RustException(NativeReturn value)

@@ -559,7 +559,7 @@ impl eframe::App for LauncherGui {
 
         let size = ctx.input(|i| i.screen_rect());
         let width = size.width();
-        let height = size.height();
+        // let height = size.height();
 
         ctx.style_mut(|style| {
             style.spacing.indent = 0.0;
@@ -976,6 +976,7 @@ enum Error {
     SerdeJson(serde_json::Error),
     TomlDE(toml::de::Error),
     TomlSER(toml::ser::Error),
+    ProfileError(launcher_core::account::types::ProfileError),
 }
 
 impl From<reqwest::Error> for Error {
@@ -1010,12 +1011,13 @@ impl From<toml::ser::Error> for Error {
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = match self {
-            Error::Reqwest(err) => err.to_string(),
-            Error::Tokio(err) => err.to_string(),
-            Error::SerdeJson(err) => err.to_string(),
-            Error::TomlDE(err) => err.to_string(),
-            Error::TomlSER(err) => err.to_string(),
+        let str: &dyn std::fmt::Display = match self {
+            Error::Reqwest(err) => err,
+            Error::Tokio(err) => err,
+            Error::SerdeJson(err) => err,
+            Error::TomlDE(err) => err,
+            Error::TomlSER(err) => err,
+            Error::ProfileError(err) => err,
         };
         write!(f, "{}", str)
     }
@@ -1027,6 +1029,7 @@ impl From<launcher_core::Error> for Error {
             launcher_core::Error::Reqwest(e) => Error::Reqwest(e),
             launcher_core::Error::Tokio(e) => Error::Tokio(e),
             launcher_core::Error::SerdeJson(e) => Error::SerdeJson(e),
+            launcher_core::Error::ProfileError(e) => Error::ProfileError(e),
         }
     }
 }
