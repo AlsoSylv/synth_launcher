@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Threading;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -11,22 +12,16 @@ namespace cs_gui;
 public partial class UserCodeWindow : Window {
     private readonly string _userCode;
     private readonly string _verificationUrl;
+    private Task? _authHandle = null;
     private readonly CancellationTokenSource _cancelToken = new ();
     private readonly SafeNativeMethods _handle;
     
     public UserCodeWindow(SafeNativeMethods handle, string userCode, string verificationUrl) {
+        InitializeComponent();
+
         _handle = handle;
         _userCode = userCode;
         _verificationUrl = verificationUrl;
-
-        InitializeComponent();
-
-        Closing += (_, _) =>
-        {
-            _cancelToken.Cancel();
-        };
-        
-        UserCodeDisplay.Text = _userCode;
     }
 
     private void InputElement_OnTapped(object? _, TappedEventArgs e) {
@@ -54,8 +49,12 @@ public partial class UserCodeWindow : Window {
         };
 
         Dispatcher.UIThread.InvokeAsync(async () => {
-            await _handle.Auth(_cancelToken.Token);
-            Close();
+            _authHandle = _handle.Auth(_cancelToken.Token);
+            while (!_authHandle.IsCompleted) {
+                await Task.Delay(10);
+            }
+
+            Close("Success");
         });
     }
 
@@ -67,5 +66,10 @@ public partial class UserCodeWindow : Window {
     private void UserUrl_OnPointerExited(object? _, PointerEventArgs e) {
         UserUrl.Foreground = Foreground;
         UserUrl.TextDecorations = null;
+    }
+
+    protected override void OnClosing(WindowClosingEventArgs e) {
+        if (_authHandle is { IsCompleted: false }) _cancelToken.Cancel();
+        base.OnClosing(e);
     }
 }

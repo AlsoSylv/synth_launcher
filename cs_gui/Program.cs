@@ -368,6 +368,12 @@ public class SafeNativeMethods {
             return NativeMethods.needs_refresh(State, index);
         }
     }
+
+    public void RemoveAccount(nuint index) {
+        unsafe {
+            NativeMethods.remove_account(State, index);
+        }
+    }
 }
 
 internal class RustException(NativeReturn value)
