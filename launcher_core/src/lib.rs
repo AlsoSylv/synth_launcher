@@ -372,6 +372,7 @@ impl AsyncLauncher {
         if tokio::fs::try_exists(&file).await? {
             let buf = tokio::fs::read(&file).await?;
             if sha1(&buf) == version_details.sha1() {
+                finished_bytes.store(version_details.downloads.client.size, std::sync::atomic::Ordering::Relaxed);
                 return Ok(str);
             }
         }
@@ -380,7 +381,7 @@ impl AsyncLauncher {
 
         let jar = self.client.get(url).send().await?;
         let len = jar.content_length().unwrap();
-        total_bytes.store(len, std::sync::atomic::Ordering::Relaxed);
+        finished_bytes.store(len, std::sync::atomic::Ordering::Relaxed);
 
         let mut stream = jar.bytes_stream();
         write_file(&mut file, &mut stream, finished_bytes).await?;

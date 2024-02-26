@@ -111,7 +111,7 @@ namespace CsBindgen
         [DllImport(__DllName, EntryPoint = "cancel_libraries", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern void cancel_libraries(TaskWrapper* raw_task);
 
-        /// <summary># Safety Total and Finished will be treated like atomics</summary>
+        /// <summary># Safety # Total and Finished will be treated like atomics</summary>
         [DllImport(__DllName, EntryPoint = "get_assets", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern TaskWrapper* get_assets(State* state, ulong* total, ulong* finished);
 
@@ -141,7 +141,10 @@ namespace CsBindgen
         public static extern void cancel_jar(TaskWrapper* raw_task);
 
         [DllImport(__DllName, EntryPoint = "play", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void play();
+        public static extern void play(State* state, nuint jvm_index, nuint acc_index);
+
+        [DllImport(__DllName, EntryPoint = "play_default_jvm", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void play_default_jvm(State* state, nuint acc_index);
 
         [DllImport(__DllName, EntryPoint = "get_device_response", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern TaskWrapper* get_device_response();
@@ -219,7 +222,11 @@ namespace CsBindgen
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "add_jvm", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void add_jvm(State* state, ushort* ptr, nuint len);
+        public static extern NativeReturn add_jvm(State* state, ushort* ptr, nuint len);
+
+        /// <summary># Safety</summary>
+        [DllImport(__DllName, EntryPoint = "remove_jvm", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void remove_jvm(State* state, nuint index);
 
 
     }

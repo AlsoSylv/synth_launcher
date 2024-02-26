@@ -40,8 +40,9 @@ internal static class Program {
 }
 
 public class AssetTask {
-    private ulong _total = 0;
-    private ulong _finished = 0;
+    // TODO: This needs to be replaced with Rust atomics and FFI calls to function on ARM correctly 
+    private ulong _total;
+    private ulong _finished;
     private readonly unsafe State* _state;
     public Task Task { get; private set; }
 
@@ -88,14 +89,12 @@ public class AssetTask {
     }
 
     public ulong Total => _total;
-    public ulong Finished => _finished;
-
     public double Percentage => (double) _finished / _total;
 }
 
 public class LibrariesTask {
-    private ulong _total = 0;
-    private ulong _finished = 0;
+    private ulong _total;
+    private ulong _finished;
     private readonly unsafe State* _state;
     public Task Task { get; private set; }
 
@@ -142,14 +141,12 @@ public class LibrariesTask {
     }
 
     public ulong Total => _total;
-    public ulong Finished => _finished;
-
     public double Percentage => (double) _finished / _total;
 }
 
 public class JarTask {
-    private ulong _total = 0;
-    private ulong _finished = 0;
+    private ulong _total;
+    private ulong _finished;
     private readonly unsafe State* _state;
     public Task Task { get; private set; }
 
@@ -196,8 +193,6 @@ public class JarTask {
     }
 
     public ulong Total => _total;
-    public ulong Finished => _finished;
-
     public double Percentage => (double) _finished / _total;
 }
 
@@ -205,7 +200,7 @@ public class SafeNativeMethods {
     internal readonly unsafe State* State;
 
     public SafeNativeMethods() {
-        var path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData).ToCharArray();
         unsafe {
             fixed (char* utf16Ptr = path) {
                 State = NativeMethods.new_rust_state((ushort*) utf16Ptr, (nuint) path.Length);
@@ -227,12 +222,18 @@ public class SafeNativeMethods {
             }
         });
 
-    public bool IsManifestNull() {
-        unsafe {
-            return NativeMethods.is_manifest_null(State);
+    public bool IsManifestNull {
+        get {
+            unsafe {
+                return NativeMethods.is_manifest_null(State);
+            }
         }
     }
 
+    /// <summary>
+    /// TODO: This needs to return an index, not a name
+    /// </summary>
+    /// <returns></returns>
     public ReadOnlySpan<byte> GetLatestRelease() {
         unsafe {
             return Program.CopyRefString(NativeMethods.get_latest_release(State));
@@ -372,6 +373,39 @@ public class SafeNativeMethods {
     public void RemoveAccount(nuint index) {
         unsafe {
             NativeMethods.remove_account(State, index);
+        }
+    }
+
+    public nuint JvmLen {
+        get {
+            unsafe {
+                return NativeMethods.jvm_len(State);
+            }
+        }
+    }
+    
+    public string GetJvmName(nuint index) {
+        unsafe {
+            return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.jvm_name(State, index)));
+        }
+    }
+
+    public void AddJvm(string path) {
+        unsafe {
+            var arr = path.ToCharArray();
+            fixed (char* str = arr) NativeMethods.add_jvm(State, (ushort*)str, (nuint)arr.Length);
+        }
+    }
+
+    public void Play(nuint jvmIndex, nuint accIndex) {
+        unsafe {
+            NativeMethods.play(State, jvmIndex, accIndex);
+        }
+    }
+    
+    public void Play(nuint accIndex) {
+        unsafe {
+            NativeMethods.play_default_jvm(State, accIndex);
         }
     }
 }

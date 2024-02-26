@@ -517,7 +517,7 @@ pub extern "C" fn cancel_libraries(raw_task: *mut TaskWrapper<Result<(), Error>>
 
 #[no_mangle]
 /// # Safety
-/// Total and Finished will be treated like atomics
+/// # Total and Finished will be treated like atomics
 pub unsafe extern "C" fn get_assets(
     state: *mut State,
     total: *mut u64,
@@ -603,8 +603,30 @@ pub extern "C" fn cancel_jar(raw_task: *mut TaskWrapper<Result<String, Error>>) 
 }
 
 #[no_mangle]
-pub extern "C" fn play() {
-    todo!()
+pub unsafe extern "C" fn play(state: *mut State, jvm_index: usize, acc_index: usize) {
+    let state = &*state;
+    let guard = state.data.blocking_read();
+    let jvm = &guard.jvms[jvm_index];
+    let acc = &guard.accounts[acc_index];
+    let guard = state.selected_version.blocking_read();
+    let version_json = guard.as_ref().unwrap();
+    let directory = &state.path;
+    let class_path = state.class_path.as_ref().unwrap();
+    let jar_path = state.jar_path.as_ref().unwrap();
+    launcher_core::launch_game(&jvm.path, version_json, directory, &directory.join("assets"), &acc.account, CLIENT_ID, "", "synth_launcher", "0", &format!("{class_path}{jar_path}"));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn play_default_jvm(state: *mut State, acc_index: usize) {
+    let state = &*state;
+    let guard = state.data.blocking_read();
+    let acc = &guard.accounts[acc_index];
+    let guard = state.selected_version.blocking_read();
+    let version_json = guard.as_ref().unwrap();
+    let directory = &state.path;
+    let class_path = state.class_path.as_ref().unwrap();
+    let jar_path = state.jar_path.as_ref().unwrap();
+    launcher_core::launch_game("java", version_json, directory, &directory.join("assets"), &acc.account, CLIENT_ID, "", "synth_launcher", "0", &format!("{class_path}{jar_path}"));
 }
 
 pub const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
@@ -823,13 +845,24 @@ pub unsafe extern "C" fn jvm_name(state: *mut State, index: usize) -> RefStringW
 
 #[no_mangle]
 /// # Safety
-pub unsafe extern "C" fn add_jvm(state: *mut State, ptr: *const u16, len: usize) {
+pub unsafe extern "C" fn add_jvm(state: *mut State, ptr: *const u16, len: usize) -> NativeReturn {
     let string = String::from_utf16(slice::from_raw_parts(ptr, len)).unwrap();
-    let (vendor, version) = get_vendor_major_version(&string);
-    (*state).data.blocking_write().jvms.push(Jvm { path: string, name: format!("{vendor} {version}") })
+    match get_vendor_major_version(&string) {
+        Ok((vendor, version)) => {
+            (*state).data.blocking_write().jvms.push(Jvm { path: string, name: format!("{vendor} {version}") });
+            NativeReturn::success()
+        }
+        Err(e) => e.into()
+    }
 }
 
-fn get_vendor_major_version(jvm: &str) -> (String, u32) {
+#[no_mangle]
+/// # Safety
+pub unsafe extern "C" fn remove_jvm(state: *mut State, index: usize) {
+    (*state).data.blocking_write().jvms.remove(index);
+}
+
+fn get_vendor_major_version(jvm: &str) -> Result<(String, u32), Error> {
     /// Compiled Java byte-code to check for the current Java Version
     /// Source can be found in VersionPrinter.java
     const CHECKER_CLASS: &[u8] = include_bytes!("VersionPrinter.class");
@@ -841,8 +874,15 @@ fn get_vendor_major_version(jvm: &str) -> (String, u32) {
         .env_clear()
         .current_dir(tmp)
         .args(["-DFile.Encoding=UTF-8", "VersionPrinter"])
-        .output()
-        .unwrap();
+        .output()?;
+
+    if !io.status.success() {
+        todo!()
+    }
+
+    if !io.stderr.is_empty() {
+        todo!()
+    }
 
     let string = String::from_utf8_lossy(&io.stdout);
 
@@ -859,7 +899,7 @@ fn get_vendor_major_version(jvm: &str) -> (String, u32) {
     let name = name.to_string();
     let version = version.parse().unwrap_or(0);
 
-    (name, version)
+    Ok((name, version))
 }
 
 async fn auth(auth_res: AuthorizationTokenResponse) -> Result<AccRefreshPair, Error> {

@@ -14,21 +14,25 @@ public partial class MainWindow : Window
     private Task? _versionTask;
     private readonly CancellationTokenSource _token = new();
     private readonly ObservableCollection<string> _accounts;
+    private readonly ObservableCollection<string> _jvms;
     private SafeNativeMethods _handle;
 
     public MainWindow()
     {
         _handle = new SafeNativeMethods();
         _accounts = new ObservableCollection<string>();
-        
+        _jvms = new ObservableCollection<string> { "Default" };
+
         InitializeComponent();
         var task = _handle.GetManifest();
         
         AccountSelector.ItemsSource = _accounts;
+        JvmSelector.ItemsSource = _jvms;
+        JvmSelector.SelectedIndex = 0;
 
         for (nuint i = 0; i < _handle.AccountLength; i++) _accounts.Add(_handle.GetAccountName(i));
+        for (nuint i = 0; i < _handle.JvmLen; i++) _jvms.Add(_handle.GetAccountName(i));
         
-
         VersionSelectBox.IsEnabled = false;
 
         Dispatcher.UIThread.InvokeAsync(async () =>
@@ -100,7 +104,7 @@ public partial class MainWindow : Window
         if (VersionSelectBox.SelectedIndex < 0 | _versionTask == null) return;
         button.IsEnabled = false;
         
-        Dispatcher.UIThread.InvokeAsync(async () => {
+        Dispatcher.UIThread.InvokeAsync(async delegate {
             await _versionTask!;
             var assetTask = new AssetTask(ref _handle);
             var librariesTask = new LibrariesTask(ref _handle);
@@ -117,9 +121,16 @@ public partial class MainWindow : Window
                 await Task.Delay(10);
             }
             
-            progressWindow.LibraryProgressBar.Value = assetTask.Percentage;
+            progressWindow.LibraryProgressBar.Value = librariesTask.Percentage;
             progressWindow.AssetProgressBar.Value = assetTask.Percentage;
-            progressWindow.JarProgressBar.Value = assetTask.Percentage;
+            progressWindow.JarProgressBar.Value = jarTask.Percentage;
+            
+            var jvmIndex = JvmSelector.SelectedIndex;
+            var accIndex = AccountSelector.SelectedIndex;
+            if (jvmIndex == 0) 
+                _handle.Play((nuint)accIndex);
+            else
+                _handle.Play((nuint)jvmIndex-1, (nuint)accIndex);
             button.IsEnabled = true;
         });
     }

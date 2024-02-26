@@ -12,7 +12,7 @@ namespace cs_gui;
 public partial class UserCodeWindow : Window {
     private readonly string _userCode;
     private readonly string _verificationUrl;
-    private Task? _authHandle = null;
+    private Task? _authHandle;
     private readonly CancellationTokenSource _cancelToken = new ();
     private readonly SafeNativeMethods _handle;
     
