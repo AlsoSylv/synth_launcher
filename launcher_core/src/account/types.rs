@@ -92,7 +92,6 @@ pub struct ProfileError {
     pub error_type: String,
     pub error: String,
     pub error_message: String,
-    pub developer_message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,7 +106,7 @@ impl Display for ProfileError {
         write!(
             f,
             "Error: {}, Reason: {}",
-            self.error_message, self.error_message
+            self.error, self.error_message
         )
     }
 }

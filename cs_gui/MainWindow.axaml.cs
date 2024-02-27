@@ -124,6 +124,27 @@ public partial class MainWindow : Window
             progressWindow.LibraryProgressBar.Value = librariesTask.Percentage;
             progressWindow.AssetProgressBar.Value = assetTask.Percentage;
             progressWindow.JarProgressBar.Value = jarTask.Percentage;
+
+            try {
+                await assetTask.Task;
+            }
+            catch (Exception e) {
+                Console.WriteLine(e);
+            }
+            
+            try {
+                await librariesTask.Task;
+            }
+            catch (Exception e) {
+                Console.WriteLine(e);
+            }
+            
+            try {
+                await jarTask.Task;
+            }
+            catch (Exception e) {
+                Console.WriteLine(e);
+            }
             
             var jvmIndex = JvmSelector.SelectedIndex;
             var accIndex = AccountSelector.SelectedIndex;

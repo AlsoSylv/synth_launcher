@@ -132,6 +132,7 @@ pub enum Code {
     IOError,
     SerdeError,
     ProfileError,
+    JvmError,
 }
 
 impl From<Error> for NativeReturn {
@@ -858,11 +859,38 @@ pub unsafe extern "C" fn add_jvm(state: *mut State, ptr: *const u16, len: usize)
 
 #[no_mangle]
 /// # Safety
-pub unsafe extern "C" fn remove_jvm(state: *mut State, index: usize) {
-    (*state).data.blocking_write().jvms.remove(index);
+pub extern "C" fn remove_jvm(state: &State, index: usize) {
+    state.data.blocking_write().jvms.remove(index);
 }
 
-fn get_vendor_major_version(jvm: &str) -> Result<(String, u32), Error> {
+pub enum JvmError {
+    Io(std::io::Error),
+    Fail(String)
+}
+
+impl From<JvmError> for NativeReturn {
+    fn from(value: JvmError) -> Self {
+        let code = Code::JvmError;
+
+        let str: &dyn Display = match &value {
+            JvmError::Io(e) => e,
+            JvmError::Fail(e) => e,
+        };
+
+        NativeReturn {
+            code,
+            error: str.to_string().into()
+        }
+    }
+}
+
+impl From<std::io::Error> for JvmError {
+    fn from(value: std::io::Error) -> Self {
+        JvmError::Io(value)
+    }
+}
+
+fn get_vendor_major_version(jvm: &str) -> Result<(String, u32), JvmError> {
     /// Compiled Java byte-code to check for the current Java Version
     /// Source can be found in VersionPrinter.java
     const CHECKER_CLASS: &[u8] = include_bytes!("VersionPrinter.class");
@@ -876,15 +904,15 @@ fn get_vendor_major_version(jvm: &str) -> Result<(String, u32), Error> {
         .args(["-DFile.Encoding=UTF-8", "VersionPrinter"])
         .output()?;
 
-    if !io.status.success() {
-        todo!()
-    }
-
     if !io.stderr.is_empty() {
-        todo!()
+        return Err(JvmError::Fail(String::from_utf8(io.stderr).unwrap()));
     }
 
-    let string = String::from_utf8_lossy(&io.stdout);
+    if !io.status.success() {
+        return Err(JvmError::Fail(io.status.to_string()));
+    }
+
+    let string = String::from_utf8(io.stdout).unwrap();
 
     let (version, name) = unsafe { string.split_once('\n').unwrap_unchecked() };
 

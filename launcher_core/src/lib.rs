@@ -219,51 +219,60 @@ impl AsyncLauncher {
         );
         finished.store(0, std::sync::atomic::Ordering::Relaxed);
 
+        // Check tha the dir we're going to be working in exists
         let object_path = &directory.join("objects");
-        if !tokio::fs::try_exists(&object_path).await? {
-            tokio::fs::create_dir(&object_path).await?;
+        if !tokio::fs::try_exists(object_path).await? {
+            tokio::fs::create_dir_all(object_path).await?;
         }
 
         stream::iter(asset_index.objects.values().map(Ok))
             .try_for_each_concurrent(16, |asset| async {
-                let first_two = &asset.hash[0..2];
+                let first_two = &asset.hash[0..=1];
                 let dir_path = object_path.join(first_two);
                 let file_path = dir_path.join(&asset.hash);
 
-                if file_path.exists() {
+                // If the file exists, we can verify it
+                let mut file = if file_path.exists() {
                     let mut file = tokio::fs::File::open(&file_path).await?;
+                    // If the lengths don't match, there is no reason to hash
                     if file.metadata().await?.len() == asset.size {
+                        // Buffer size of 64kb
                         let mut buf = [0; 64 * 1024];
                         let mut hasher = sha1_smol::Sha1::new();
 
+                        // Update the hasher with the bytes read, until we've read everything
                         let mut total_read = 0;
-                        loop {
+                        while total_read < asset.size {
                             let read_bytes = file.read(&mut buf).await?;
-                            total_read += read_bytes;
+                            total_read += read_bytes as u64;
                             hasher.update(&buf[..read_bytes]);
-                            if total_read == asset.size as usize {
-                                break;
-                            }
                         }
 
+                        // If they match, we don't need to do any more work
                         if hasher.digest().to_string() == asset.hash {
                             finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
                             return Ok(());
-                        } else {
-                            tokio::fs::remove_file(&file_path).await?;
                         }
-                    } else {
-                        tokio::fs::remove_file(&file_path).await?;
                     }
-                } else if !dir_path.exists() {
-                    tokio::fs::create_dir_all(dir_path).await?;
+
+                    // Otherwise we empty the file and overwrite it
+                    file.set_len(0).await?;
+                    file
+                } else {
+                    // Else we make sure the dir it sits in exists, and create a new one
+                    if !dir_path.exists() {
+                        tokio::fs::create_dir_all(dir_path).await?;
+                    }
+                    tokio::fs::File::create(&file_path).await?
                 };
 
+                // Format the URL according to how the meta holds it
                 let url = format!("{}/{}/{}", ASSET_BASE_URL, first_two, &asset.hash);
                 let response = self.client.get(url).send().await?;
+                // Create a stream from the response
                 let mut bytes = response.bytes_stream();
-                let mut file = tokio::fs::File::create(&file_path).await?;
 
+                // Write the bytes to the file
                 while let Some(chunk) = bytes.next().await {
                     let chunk = chunk.unwrap();
                     file.write_all(&chunk).await?;
@@ -291,6 +300,7 @@ impl AsyncLauncher {
         stream::iter(libraries.iter().filter_map(|library| {
             let native = library.rule.native();
 
+            #[allow(clippy::question_mark)]
             let Some(artifact) = &library.downloads else {
                 return None;
             };

@@ -276,6 +276,7 @@ namespace CsBindgen
         IOError,
         SerdeError,
         ProfileError,
+        JvmError,
     }
 
     public enum ReleaseType : uint
