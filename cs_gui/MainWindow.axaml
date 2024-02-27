@@ -11,38 +11,33 @@
                   HorizontalAlignment="Stretch">
             <ComboBox.ItemTemplate>
                 <DataTemplate x:DataType="x:String">
-                    <TextBlock Text="{Binding}"></TextBlock>
+                    <TextBlock Text="{Binding}" />
                 </DataTemplate>
             </ComboBox.ItemTemplate>
         </ComboBox>
 
-        <Button Grid.Row="1" Grid.Column="0" Name="PlayButton" Click="PlayButton_OnClick" HorizontalAlignment="Stretch">Play</Button>
+        <Button Grid.Row="1" Grid.Column="0" Name="PlayButton" Click="PlayButton_OnClick" HorizontalAlignment="Stretch"
+                Content="Play" />
 
-        <DockPanel Grid.Row="3" Grid.Column="0"  HorizontalAlignment="Stretch" Margin="5, 0, 0, 5">
-            <Button Name="AddJvm" DockPanel.Dock="Left">+</Button>
-            <Button Name="RemoveJvm" DockPanel.Dock="Right">-</Button>
-            <ComboBox Name="JvmSelector" HorizontalAlignment="Stretch"></ComboBox>
+        <DockPanel Grid.Row="3" Grid.Column="0" HorizontalAlignment="Stretch" Margin="5, 0, 0, 5">
+            <Button Name="AddJvm" DockPanel.Dock="Left" Content="+" />
+            <Button Name="RemoveJvm" DockPanel.Dock="Right" Content="-" />
+            <ComboBox Name="JvmSelector" HorizontalAlignment="Stretch" />
         </DockPanel>
-        
-        <DockPanel Grid.Row="4" Grid.Column="0"  HorizontalAlignment="Stretch" Margin="5, 0, 0, 5">
-            <Button Name="LoginButton" Click="Button_OnClick" DockPanel.Dock="Left">+</Button>
-            <Button Name="RemoveAccount" Click="RemoveAccount_OnClick" DockPanel.Dock="Right">-</Button>
-            <ComboBox Name="AccountSelector" SelectionChanged="AccountSelector_OnSelectionChanged" HorizontalAlignment="Stretch">
+
+        <DockPanel Grid.Row="4" Grid.Column="0" HorizontalAlignment="Stretch" Margin="5, 0, 0, 5">
+            <Button Name="LoginButton" Click="Button_OnClick" DockPanel.Dock="Left" Content="+" />
+            <Button Name="RemoveAccount" Click="RemoveAccount_OnClick" DockPanel.Dock="Right" Content="-" />
+            <ComboBox Name="AccountSelector" SelectionChanged="AccountSelector_OnSelectionChanged"
+                      HorizontalAlignment="Stretch">
                 <ComboBox.ItemTemplate>
                     <DataTemplate DataType="x:String">
-                        <TextBlock Text="{Binding}"></TextBlock>
+                        <TextBlock Text="{Binding}" />
                     </DataTemplate>
                 </ComboBox.ItemTemplate>
             </ComboBox>
         </DockPanel>
-        
-        <StackPanel Grid.Column="0" Grid.Row="3" Orientation="Horizontal" Margin="5, 0, 0, 5" HorizontalAlignment="Stretch">
 
-        </StackPanel>
-
-        <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Margin="5, 0, 0, 5">
-
-        </StackPanel>
         <WrapPanel Grid.Column="1" Grid.Row="0" Grid.RowSpan="4">
         </WrapPanel>
     </Grid>

@@ -231,30 +231,28 @@ impl AsyncLauncher {
                 let file_path = dir_path.join(&asset.hash);
 
                 if file_path.exists() {
-                    let mut buf = [0; 64 * 1024];
                     let mut file = tokio::fs::File::open(&file_path).await?;
-                    let mut hasher = sha1_smol::Sha1::new();
+                    if file.metadata().await?.len() == asset.size {
+                        let mut buf = [0; 64 * 1024];
+                        let mut hasher = sha1_smol::Sha1::new();
 
-                    let mut total_read = 0;
-                    loop {
-                        let read_bytes = file.read(&mut buf).await?;
-                        total_read += read_bytes;
-                        hasher.update(&buf[..read_bytes]);
-                        if total_read == asset.size as usize {
-                            break;
+                        let mut total_read = 0;
+                        loop {
+                            let read_bytes = file.read(&mut buf).await?;
+                            total_read += read_bytes;
+                            hasher.update(&buf[..read_bytes]);
+                            if total_read == asset.size as usize {
+                                break;
+                            }
                         }
-                    }
 
-                    let hash = hasher.digest().to_string();
-
-                    if hasher.digest().to_string() == asset.hash {
-                        finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
-                        return Ok(());
+                        if hasher.digest().to_string() == asset.hash {
+                            finished.fetch_add(asset.size, std::sync::atomic::Ordering::Relaxed);
+                            return Ok(());
+                        } else {
+                            tokio::fs::remove_file(&file_path).await?;
+                        }
                     } else {
-                        println!(
-                            "Hash was wrong, expected: {}, but found: {hash}",
-                            asset.hash
-                        );
                         tokio::fs::remove_file(&file_path).await?;
                     }
                 } else if !dir_path.exists() {
