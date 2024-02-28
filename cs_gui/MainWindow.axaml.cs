@@ -42,7 +42,7 @@ public partial class MainWindow : Window
                 await task;
                 var list = new ObservableCollection<string>();
                 VersionSelectBox.ItemsSource = list;
-                var len = _handle.ManifestLength();
+                var len = _handle.ManifestLength;
                 
                 for (UIntPtr idx = 0; idx < len; idx++)
                     list.Add(Encoding.UTF8.GetString(_handle.GetVersionId(idx)));
@@ -84,8 +84,8 @@ public partial class MainWindow : Window
 
         Dispatcher.UIThread.InvokeAsync(async delegate {
             await _handle.GetDeviceResponse;
-            var userCode = _handle.GetCode();
-            var window = new UserCodeWindow(_handle, userCode, _handle.GetUrl()) {
+            var userCode = _handle.AuthCode;
+            var window = new UserCodeWindow(_handle, userCode, _handle.AuthUrl) {
                 UserCodeDisplay = {
                     Text = userCode
                 }
@@ -93,7 +93,7 @@ public partial class MainWindow : Window
 
             var res = await window.ShowDialog<string>(this);
 
-            if (res == "success") _accounts.Add(_handle.GetAccountName(_handle.AccountLength - 1));
+            if (res == "Success") _accounts.Add(_handle.GetAccountName(_handle.AccountLength - 1));
 
             button.IsEnabled = true;
         });
@@ -105,7 +105,12 @@ public partial class MainWindow : Window
         button.IsEnabled = false;
         
         Dispatcher.UIThread.InvokeAsync(async delegate {
-            await _versionTask!;
+            try {
+                await _versionTask!;
+            }
+            catch (Exception e) {
+                Console.WriteLine(e);
+            }
             var assetTask = new AssetTask(_handle);
             var librariesTask = new LibrariesTask(ref _handle);
             var jarTask = new JarTask(ref _handle);

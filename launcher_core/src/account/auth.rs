@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::Serialize;
+use std::collections::HashMap;
 
 use crate::account::types::ProfileResult;
 use serde_json::json;
@@ -28,10 +28,27 @@ pub async fn authorization_token_response(
     device_code: &str,
     client_id: &str,
 ) -> Result<types::AuthorizationTokenResponse, crate::Error> {
+    token_response(client, device_code, client_id, "urn:ietf:params:oauth:grant-type:device_code").await
+}
+
+pub async fn refresh_token_response(
+    client: &reqwest::Client,
+    refresh_token: &str,
+    client_id: &str,
+) -> Result<types::AuthorizationTokenResponse, crate::Error> {
+    token_response(client, refresh_token, client_id, "refresh_token").await
+}
+
+pub async fn token_response(
+    client: &reqwest::Client,
+    device_code: &str,
+    client_id: &str,
+    grant_type: &str,
+) -> Result<types::AuthorizationTokenResponse, crate::Error> {
     Ok(client
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
         .form(&[
-            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ("grant_type", grant_type),
             ("client_id", client_id),
             ("device_code", device_code),
         ])
@@ -41,23 +58,6 @@ pub async fn authorization_token_response(
         .await?)
 }
 
-pub async fn refresh_token_response(
-    client: &reqwest::Client,
-    refresh_token: &str,
-    client_id: &str,
-) -> Result<types::RefreshTokenResponse, crate::Error> {
-    Ok(client
-        .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("client_id", client_id),
-            ("refresh_token", refresh_token),
-        ])
-        .send()
-        .await?
-        .json()
-        .await?)
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -85,7 +85,7 @@ pub async fn xbox_response(
             properties: Properties {
                 auth_method: "RPS",
                 site_name: "user.auth.xboxlive.com",
-                rps_ticket: format!("d={}", access_token)
+                rps_ticket: format!("d={}", access_token),
             },
             relying_party: "http://auth.xboxlive.com",
             token_type: "JWT",
@@ -96,6 +96,21 @@ pub async fn xbox_response(
         .await?)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct Security<'se> {
+    properties: Props<'se>,
+    relying_party: &'static str,
+    token_type: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct Props<'se> {
+    sandbox_id: &'static str,
+    user_tokens: [&'se str; 1],
+}
+
 pub async fn xbox_security_token_response(
     client: &reqwest::Client,
     token: &str,
@@ -103,14 +118,24 @@ pub async fn xbox_security_token_response(
     Ok(client
         .post("https://xsts.auth.xboxlive.com/xsts/authorize")
         // TODO: Replace with struct
-        .json(&json!({
+        /*
+        json!({
             "Properties": {
                 "SandboxId": "RETAIL",
                 "UserTokens": [&token]
             },
             "RelyingParty": "rp://api.minecraftservices.com/",
             "TokenType": "JWT"
-        }))
+        })
+         */
+        .json(&Security {
+            properties: Props {
+                sandbox_id: "RETAIL",
+                user_tokens: [token]
+            },
+            relying_party: "rp://api.minecraftservices.com/",
+            token_type: "JWT"
+        })
         .send()
         .await?
         .json()

@@ -5,8 +5,8 @@ use crate::tasks::{
     await_task, cancel_task, get_task, poll_task, ManifestTask, ManifestTaskWrapper, TaskWrapper,
 };
 use launcher_core::account::auth::{
-    authorization_token_response, minecraft_profile_response,
-    minecraft_response, refresh_token_response, xbox_response, xbox_security_token_response,
+    authorization_token_response, minecraft_profile_response, minecraft_response,
+    refresh_token_response, xbox_response, xbox_security_token_response,
 };
 use launcher_core::account::types::{
     Account, AuthorizationTokenResponse, DeviceCodeResponse, MinecraftAuthenticationResponse,
@@ -17,7 +17,7 @@ use launcher_core::{AsyncLauncher, Error};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::path::PathBuf;
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 use std::slice;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, OnceLock};
@@ -243,8 +243,13 @@ impl OwnedStringWrapper {
 
 #[no_mangle]
 /// # Safety
-pub unsafe extern "C" fn new_rust_state(path: *const u16, len: usize) -> *mut State {
-    let path = String::from_utf16(slice::from_raw_parts(path, len)).unwrap();
+pub extern "C" fn new_rust_state(path: *const u16, len: usize) -> *mut State {
+    assert_ne!(path, null());
+    assert_eq!(path.align_offset(std::mem::align_of::<*const u16>()), 0);
+
+    let slice = unsafe { slice::from_raw_parts(path, len) };
+
+    let path = String::from_utf16(slice).unwrap();
     let path = PathBuf::from(path).join("synth_launcher");
     Box::leak(Box::new(State::new(path)))
 }
@@ -421,7 +426,7 @@ pub unsafe extern "C" fn get_asset_index(
     let state = &*state;
     get_task(async move {
         let version = &state.selected_version;
-        let path = &state.path;
+        let path = &state.path.join("assets");
         let tmp = version.read().await;
         let version = tmp.as_ref().unwrap();
         launcher()
@@ -588,13 +593,16 @@ pub extern "C" fn poll_jar(raw_task: *mut TaskWrapper<Result<String, Error>>) ->
 
 #[no_mangle]
 /// # Safety
-pub unsafe extern "C" fn await_jar(state: *mut State, raw_task: *mut TaskWrapper<Result<String, Error>>) -> NativeReturn {
+pub unsafe extern "C" fn await_jar(
+    state: *mut State,
+    raw_task: *mut TaskWrapper<Result<String, Error>>,
+) -> NativeReturn {
     await_task(raw_task, |inner| match inner {
         Ok(path) => {
             (*state).jar_path = Some(path);
             NativeReturn::success()
         }
-        Err(e) => e.into()
+        Err(e) => e.into(),
     })
 }
 
@@ -614,7 +622,18 @@ pub unsafe extern "C" fn play(state: *mut State, jvm_index: usize, acc_index: us
     let directory = &state.path;
     let class_path = state.class_path.as_ref().unwrap();
     let jar_path = state.jar_path.as_ref().unwrap();
-    launcher_core::launch_game(&jvm.path, version_json, directory, &directory.join("assets"), &acc.account, CLIENT_ID, "", "synth_launcher", "0", &format!("{class_path}{jar_path}"));
+    launcher_core::launch_game(
+        &jvm.path,
+        version_json,
+        directory,
+        &directory.join("assets"),
+        &acc.account,
+        CLIENT_ID,
+        "",
+        "synth_launcher",
+        "0",
+        &format!("{class_path}{jar_path}"),
+    );
 }
 
 #[no_mangle]
@@ -627,7 +646,18 @@ pub unsafe extern "C" fn play_default_jvm(state: *mut State, acc_index: usize) {
     let directory = &state.path;
     let class_path = state.class_path.as_ref().unwrap();
     let jar_path = state.jar_path.as_ref().unwrap();
-    launcher_core::launch_game("java", version_json, directory, &directory.join("assets"), &acc.account, CLIENT_ID, "", "synth_launcher", "0", &format!("{class_path}{jar_path}"));
+    launcher_core::launch_game(
+        "java",
+        version_json,
+        directory,
+        &directory.join("assets"),
+        &acc.account,
+        CLIENT_ID,
+        "",
+        "synth_launcher",
+        "0",
+        &format!("{class_path}{jar_path}"),
+    );
 }
 
 pub const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
@@ -760,8 +790,7 @@ pub unsafe extern "C" fn try_refresh(
         let profile = &guard.accounts[index];
 
         let refresh = refresh_token_response(client(), &profile.refresh_token, CLIENT_ID)
-            .await?
-            .into();
+            .await?;
         auth(refresh).await.map(|a| (a, index))
     })
 }
@@ -824,9 +853,9 @@ pub unsafe extern "C" fn needs_refresh(state: *mut State, index: usize) -> bool 
     let state = &*state;
     state.data.blocking_read().accounts[index].account.expiry
         <= SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
 }
 
 #[no_mangle]
@@ -847,13 +876,17 @@ pub unsafe extern "C" fn jvm_name(state: *mut State, index: usize) -> RefStringW
 #[no_mangle]
 /// # Safety
 pub unsafe extern "C" fn add_jvm(state: *mut State, ptr: *const u16, len: usize) -> NativeReturn {
+    assert_eq!(ptr.align_offset(std::mem::align_of::<&[u16]>()), 0);
     let string = String::from_utf16(slice::from_raw_parts(ptr, len)).unwrap();
     match get_vendor_major_version(&string) {
         Ok((vendor, version)) => {
-            (*state).data.blocking_write().jvms.push(Jvm { path: string, name: format!("{vendor} {version}") });
+            (*state).data.blocking_write().jvms.push(Jvm {
+                path: string,
+                name: format!("{vendor} {version}"),
+            });
             NativeReturn::success()
         }
-        Err(e) => e.into()
+        Err(e) => e.into(),
     }
 }
 
@@ -865,7 +898,7 @@ pub extern "C" fn remove_jvm(state: &State, index: usize) {
 
 pub enum JvmError {
     Io(std::io::Error),
-    Fail(String)
+    Fail(String),
 }
 
 impl From<JvmError> for NativeReturn {
@@ -879,7 +912,7 @@ impl From<JvmError> for NativeReturn {
 
         NativeReturn {
             code,
-            error: str.to_string().into()
+            error: str.to_string().into(),
         }
     }
 }

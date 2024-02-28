@@ -111,19 +111,22 @@ impl AsyncLauncher {
             let mut updated: types::VersionManifest = response.json().await?;
 
             if meta.latest != updated.latest {
-                updated
-                    .versions
-                    .drain(..)
-                    .filter(|v| !meta.versions.contains(v))
-                    .collect::<Vec<types::Version>>()
-                    .drain(..)
-                    .enumerate()
-                    .for_each(|(idx, version)| meta.versions.insert(idx, version));
+                let description = time::format_description::well_known::Rfc3339;
+                let latest = time::PrimitiveDateTime::parse(&meta.versions[0].release_time, &description).unwrap();
+
+                for (idx, version) in updated.versions.drain(..).enumerate() {
+                    let new_time = time::PrimitiveDateTime::parse(&version.release_time, &description).unwrap();
+                    if new_time > latest {
+                        meta.versions.insert(idx, version);
+                    } else {
+                        break;
+                    }
+                }
+
+                meta.latest = updated.latest;
+                let slice = serde_json::to_vec(&meta)?;
+                tokio::fs::write(file, &slice).await?;
             }
-
-            let slice = serde_json::to_vec(&meta)?;
-
-            tokio::fs::write(file, &slice).await?;
 
             Ok(meta)
         } else {
@@ -233,7 +236,11 @@ impl AsyncLauncher {
 
                 // If the file exists, we can verify it
                 let mut file = if file_path.exists() {
-                    let mut file = tokio::fs::File::open(&file_path).await?;
+                    let mut file = tokio::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&file_path)
+                        .await?;
                     // If the lengths don't match, there is no reason to hash
                     if file.metadata().await?.len() == asset.size {
                         // Buffer size of 64kb
@@ -255,7 +262,6 @@ impl AsyncLauncher {
                         }
                     }
 
-                    // Otherwise we empty the file and overwrite it
                     file.set_len(0).await?;
                     file
                 } else {
@@ -263,6 +269,7 @@ impl AsyncLauncher {
                     if !dir_path.exists() {
                         tokio::fs::create_dir_all(dir_path).await?;
                     }
+
                     tokio::fs::File::create(&file_path).await?
                 };
 
@@ -273,11 +280,7 @@ impl AsyncLauncher {
                 let mut bytes = response.bytes_stream();
 
                 // Write the bytes to the file
-                while let Some(chunk) = bytes.next().await {
-                    let chunk = chunk.unwrap();
-                    file.write_all(&chunk).await?;
-                    finished.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                }
+                write_file(&mut file, &mut bytes, finished).await?;
 
                 Ok(())
             })
@@ -301,8 +304,7 @@ impl AsyncLauncher {
         stream::iter(libraries.iter().filter_map(|library| {
             let native = library.rule.native();
 
-            let Some(artifact) = &library.downloads
-            else {
+            let Some(artifact) = &library.downloads else {
                 return None;
             };
 
