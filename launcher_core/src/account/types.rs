@@ -103,11 +103,7 @@ pub enum ProfileResult {
 
 impl Display for ProfileError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Error: {}, Reason: {}",
-            self.error, self.error_message
-        )
+        write!(f, "Error: {}, Reason: {}", self.error, self.error_message)
     }
 }
 

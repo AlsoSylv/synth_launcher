@@ -43,49 +43,44 @@ public class AssetTask {
     // TODO: This needs to be replaced with Rust atomics and FFI calls to function on ARM correctly 
     private ulong _total;
     private ulong _finished;
-    private readonly unsafe State* _state;
     public Task Task { get; private set; }
 
-    public AssetTask(ref SafeNativeMethods state) {
-        unsafe {
-            _state = state.State;
-        }
-        Task = Task.Run(GetAssets);
-        return;
+    public AssetTask(SafeNativeMethods state) {
+        Task = Task.Run(delegate
+        {
+            unsafe
+            {
+                fixed (ulong* total = &_total, finished = &_finished) {
+                    var assetTask = NativeMethods.get_assets(state.State, total, finished);
+                    while (!NativeMethods.poll_assets(assetTask)) { }
 
-        unsafe void GetAssets() {
-            fixed (ulong* total = &_total, finished = &_finished) {
-                var assetTask = NativeMethods.get_assets(_state, total, finished);
-                while (!NativeMethods.poll_assets(assetTask)) { }
-
-                var v = NativeMethods.await_assets(assetTask);
+                    var v = NativeMethods.await_assets(assetTask);
                 
-                if (v.code != Code.Success) throw new RustException(v);
+                    if (v.code != Code.Success) throw new RustException(v);
+                }
             }
-        }
+        });
     }
 
-    public AssetTask(ref SafeNativeMethods state, CancellationToken token) {
-        unsafe {
-            _state = state.State;
-        }
-        Task = Task.Run(GetAssets, token);
-        return;
+    public AssetTask(SafeNativeMethods state, CancellationToken token) {
+        Task = Task.Run(delegate
+        {
+            unsafe
+            {
+                fixed (ulong* total = &_total, finished = &_finished) {
+                    var assetTask = NativeMethods.get_assets(state.State, total, finished);
+                    while (!NativeMethods.poll_assets(assetTask)) {
+                        if (!token.IsCancellationRequested) continue;
+                        NativeMethods.cancel_assets(assetTask);
+                        token.ThrowIfCancellationRequested();
+                    }
 
-        unsafe void GetAssets() {
-            fixed (ulong* total = &_total, finished = &_finished) {
-                var assetTask = NativeMethods.get_assets(_state, total, finished);
-                while (!NativeMethods.poll_assets(assetTask)) {
-                    if (!token.IsCancellationRequested) continue;
-                    NativeMethods.cancel_assets(assetTask);
-                    token.ThrowIfCancellationRequested();
-                }
-
-                var v = NativeMethods.await_assets(assetTask);
+                    var v = NativeMethods.await_assets(assetTask);
                 
-                if (v.code != Code.Success) throw new RustException(v);
+                    if (v.code != Code.Success) throw new RustException(v);
+                }
             }
-        }
+        }, token);
     }
 
     public ulong Total => _total;

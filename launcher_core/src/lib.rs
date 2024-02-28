@@ -284,6 +284,7 @@ impl AsyncLauncher {
             .await
     }
 
+    #[allow(clippy::question_mark)]
     pub async fn download_libraries_and_get_path(
         &self,
         libraries: &[types::Library],
@@ -300,8 +301,8 @@ impl AsyncLauncher {
         stream::iter(libraries.iter().filter_map(|library| {
             let native = library.rule.native();
 
-            #[allow(clippy::question_mark)]
-            let Some(artifact) = &library.downloads else {
+            let Some(artifact) = &library.downloads
+            else {
                 return None;
             };
 
@@ -380,7 +381,10 @@ impl AsyncLauncher {
         if tokio::fs::try_exists(&file).await? {
             let buf = tokio::fs::read(&file).await?;
             if sha1(&buf) == version_details.sha1() {
-                finished_bytes.store(version_details.downloads.client.size, std::sync::atomic::Ordering::Relaxed);
+                finished_bytes.store(
+                    version_details.downloads.client.size,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 return Ok(str);
             }
         }

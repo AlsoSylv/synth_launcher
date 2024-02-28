@@ -976,7 +976,7 @@ enum Error {
     SerdeJson(serde_json::Error),
     TomlDE(toml::de::Error),
     TomlSER(toml::ser::Error),
-    ProfileError(launcher_core::account::types::ProfileError),
+    Profile(launcher_core::account::types::ProfileError),
 }
 
 impl From<reqwest::Error> for Error {
@@ -1017,7 +1017,7 @@ impl std::fmt::Display for Error {
             Error::SerdeJson(err) => err,
             Error::TomlDE(err) => err,
             Error::TomlSER(err) => err,
-            Error::ProfileError(err) => err,
+            Error::Profile(err) => err,
         };
         write!(f, "{}", str)
     }
@@ -1029,7 +1029,7 @@ impl From<launcher_core::Error> for Error {
             launcher_core::Error::Reqwest(e) => Error::Reqwest(e),
             launcher_core::Error::Tokio(e) => Error::Tokio(e),
             launcher_core::Error::SerdeJson(e) => Error::SerdeJson(e),
-            launcher_core::Error::ProfileError(e) => Error::ProfileError(e),
+            launcher_core::Error::ProfileError(e) => Error::Profile(e),
         }
     }
 }

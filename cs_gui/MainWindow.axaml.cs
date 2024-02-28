@@ -106,7 +106,7 @@ public partial class MainWindow : Window
         
         Dispatcher.UIThread.InvokeAsync(async delegate {
             await _versionTask!;
-            var assetTask = new AssetTask(ref _handle);
+            var assetTask = new AssetTask(_handle);
             var librariesTask = new LibrariesTask(ref _handle);
             var jarTask = new JarTask(ref _handle);
             

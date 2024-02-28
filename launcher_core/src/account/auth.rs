@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use serde::Serialize;
 
 use crate::account::types::ProfileResult;
 use serde_json::json;
@@ -58,21 +59,37 @@ pub async fn refresh_token_response(
         .await?)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct LiveAuthRequest {
+    properties: Properties,
+    relying_party: &'static str,
+    token_type: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct Properties {
+    auth_method: &'static str,
+    site_name: &'static str,
+    rps_ticket: String,
+}
+
 pub async fn xbox_response(
     client: &reqwest::Client,
     access_token: &str,
 ) -> Result<types::XboxLiveAuthenticationResponse, crate::Error> {
     Ok(client
         .post("https://user.auth.xboxlive.com/user/authenticate")
-        .json(&json!({
-                "Properties": {
-                "AuthMethod": "RPS",
-                "SiteName": "user.auth.xboxlive.com",
-                "RpsTicket": &format!("d={}", access_token)
+        .json(&LiveAuthRequest {
+            properties: Properties {
+                auth_method: "RPS",
+                site_name: "user.auth.xboxlive.com",
+                rps_ticket: format!("d={}", access_token)
             },
-            "RelyingParty": "http://auth.xboxlive.com",
-            "TokenType": "JWT"
-        }))
+            relying_party: "http://auth.xboxlive.com",
+            token_type: "JWT",
+        })
         .send()
         .await?
         .json()
