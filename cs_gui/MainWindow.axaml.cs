@@ -4,6 +4,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 
@@ -63,6 +64,7 @@ public partial class MainWindow : Window
     
     private void VersionSelectBox_OnSelectionChanged(object? sender, SelectionChangedEventArgs _) {
         var versionBox = (ComboBox)sender!;
+        
         if (_versionTask == null)
         {
             var index = versionBox.SelectedIndex;
@@ -183,5 +185,11 @@ public partial class MainWindow : Window
         if (index < 0) return;
         _accounts.RemoveAt(index);
         _handle.RemoveAccount((nuint) index);
+    }
+
+    private void InputElement_OnGotFocus(object? sender, GotFocusEventArgs e)
+    {
+        var stack = (StackPanel)sender!;
+        stack.Children[0].IsEnabled = true;
     }
 }

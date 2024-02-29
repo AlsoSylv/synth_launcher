@@ -6,15 +6,35 @@
         x:Class="cs_gui.MainWindow"
         Title="cs_gui">
     <Grid ColumnDefinitions="20*, 80*" RowDefinitions="Auto, Auto, *, Auto, Auto" HorizontalAlignment="Stretch">
-        <ComboBox Grid.Row="0" Grid.Column="0" x:Name="VersionSelectBox"
-                  SelectionChanged="VersionSelectBox_OnSelectionChanged" PlaceholderText="None"
-                  HorizontalAlignment="Stretch">
-            <ComboBox.ItemTemplate>
-                <DataTemplate x:DataType="x:String">
-                    <TextBlock Text="{Binding}" />
-                </DataTemplate>
-            </ComboBox.ItemTemplate>
-        </ComboBox>
+        <DockPanel>
+            <Border>
+                <ComboBox x:Name="VersionSelectBox"
+                          SelectionChanged="VersionSelectBox_OnSelectionChanged" PlaceholderText="Version Select" 
+                          HorizontalAlignment="Stretch">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                            <StackPanel GotFocus="InputElement_OnGotFocus">
+                                <Label Content="{Binding #VersionSelectBox.PlaceholderText}" IsVisible="False">
+                                    <Label.Styles>
+                                        <Style Selector="Label">
+                                            <Setter Property="FontSize" Value="10"/>
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="HorizontalContentAlignment" Value="Left"/> 
+                                            <Setter Property="VerticalContentAlignment" Value="Top"/>
+                                            <Style Selector="^:is:selected">
+                                                <Setter Property="IsVisible" Value="True"></Setter>
+                                            </Style>
+                                        </Style>
+                                    </Label.Styles>
+                                </Label>
+                                <TextBlock Text="{Binding}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+            </Border>
+
+        </DockPanel>
 
         <Button Grid.Row="1" Grid.Column="0" Name="PlayButton" Click="PlayButton_OnClick" HorizontalAlignment="Stretch"
                 Content="Play" />
@@ -38,7 +58,6 @@
             </ComboBox>
         </DockPanel>
 
-        <WrapPanel Grid.Column="1" Grid.Row="0" Grid.RowSpan="4">
-        </WrapPanel>
+        <WrapPanel Grid.Column="1" Grid.Row="0" Grid.RowSpan="4" />
     </Grid>
 </Window>
