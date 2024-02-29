@@ -235,9 +235,11 @@ public class SafeNativeMethods {
         }
     }
 
-    public nuint ManifestLength() {
-        unsafe {
-            return NativeMethods.get_manifest_len(State);
+    public nuint ManifestLength {
+        get {
+            unsafe {
+                return NativeMethods.get_manifest_len(State);
+            }
         }
     }
 
@@ -322,15 +324,19 @@ public class SafeNativeMethods {
         }
     });
 
-    public string GetCode() {
-        unsafe {
-            return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_user_code(State)));
+    public string AuthCode {
+        get {
+            unsafe {
+                return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_user_code(State)));
+            }
         }
     }
     
-    public string GetUrl() {
-        unsafe {
-            return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_url(State)));
+    public string AuthUrl {
+        get {
+            unsafe {
+                return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_url(State)));
+            }
         }
     }
 
@@ -389,6 +395,12 @@ public class SafeNativeMethods {
         unsafe {
             var arr = path.ToCharArray();
             fixed (char* str = arr) NativeMethods.add_jvm(State, (ushort*)str, (nuint)arr.Length);
+        }
+    }
+
+    public void RemoveJvm(nuint index) {
+        unsafe {
+            NativeMethods.remove_jvm(State, index);
         }
     }
 

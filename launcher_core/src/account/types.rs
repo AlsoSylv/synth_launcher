@@ -27,17 +27,6 @@ pub struct AuthorizationTokenResponse {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct RefreshTokenResponse {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub token_type: String,
-    pub scope: String,
-    pub expires_in: u64,
-    pub ext_expires_in: u32,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "PascalCase")]
 #[serde(deny_unknown_fields)]
 pub struct XboxLiveAuthenticationResponse {
@@ -145,17 +134,4 @@ pub struct Account {
     pub expiry: u64,
     pub access_token: String,
     pub profile: Profile,
-}
-
-impl From<RefreshTokenResponse> for AuthorizationTokenResponse {
-    fn from(val: RefreshTokenResponse) -> Self {
-        AuthorizationTokenResponse {
-            expires_in: val.expires_in,
-            refresh_token: val.refresh_token,
-            access_token: val.access_token,
-            ext_expires_in: val.ext_expires_in,
-            scope: val.scope,
-            token_type: val.token_type,
-        }
-    }
 }
