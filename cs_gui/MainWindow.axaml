@@ -8,30 +8,27 @@
         Title="cs_gui">
     <Grid ColumnDefinitions="20*, 80*" RowDefinitions="Auto, Auto, *, Auto, Auto" HorizontalAlignment="Stretch">
         <DockPanel>
-            <Border>
-                <ComboBox x:Name="VersionSelectBox"
-                          SelectionChanged="VersionSelectBox_OnSelectionChanged" PlaceholderText="Version Select" 
-                          HorizontalAlignment="Stretch">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="csGui:VersionWrapper">
-                            <StackPanel>
-                                <Label Content="{Binding #VersionSelectBox.PlaceholderText}" IsVisible="{Binding Selected}">
-                                    <Label.Styles>
-                                        <Style Selector="Label">
-                                            <Setter Property="FontSize" Value="10"/>
-                                            <Setter Property="Background" Value="Transparent"/>
-                                            <Setter Property="HorizontalContentAlignment" Value="Left"/> 
-                                            <Setter Property="VerticalContentAlignment" Value="Top"/>
-                                        </Style>
-                                    </Label.Styles>
-                                </Label>
-                                <TextBlock Text="{Binding Name}" />
-                            </StackPanel>
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
-            </Border>
-
+            <ComboBox x:Name="VersionSelectBox"
+                      SelectionChanged="VersionSelectBox_OnSelectionChanged" PlaceholderText="Version Select" 
+                      HorizontalAlignment="Stretch">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="csGui:VersionWrapper">
+                        <StackPanel>
+                            <Label Content="{Binding #VersionSelectBox.PlaceholderText}" IsVisible="{Binding Selected}">
+                                <Label.Styles>
+                                    <Style Selector="Label">
+                                        <Setter Property="FontSize" Value="10"/>
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="HorizontalContentAlignment" Value="Left"/> 
+                                        <Setter Property="VerticalContentAlignment" Value="Top"/>
+                                    </Style>
+                                </Label.Styles>
+                            </Label>
+                            <TextBlock Text="{Binding Name}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
         </DockPanel>
 
         <Button Grid.Row="1" Grid.Column="0" Name="PlayButton" Click="PlayButton_OnClick" HorizontalAlignment="Stretch"

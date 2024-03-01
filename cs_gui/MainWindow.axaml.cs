@@ -17,6 +17,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<string> _accounts;
     private readonly ObservableCollection<string> _jvms;
     private readonly ObservableCollection<VersionWrapper> _versionWrappers;
+    private VersionWrapper? _lastSelected;
     private SafeNativeMethods _handle;
 
     public MainWindow()
@@ -66,9 +67,15 @@ public partial class MainWindow : Window
     private void VersionSelectBox_OnSelectionChanged(object? sender, SelectionChangedEventArgs _) {
         var versionBox = (ComboBox)sender!;
         var version = (VersionWrapper)versionBox.SelectedItem!;
-        version.Selected = true;
 
+        if (_lastSelected != null)
+        {
+            _lastSelected.Selected = false;
+        }
         
+        _lastSelected = version;
+        
+        version.Selected = true;
 
         if (_versionTask != null)
         {

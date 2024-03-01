@@ -1,5 +1,8 @@
 ﻿using Avalonia;
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -191,11 +194,17 @@ public class JarTask {
     public double Percentage => (double) _finished / _total;
 }
 
-public class VersionWrapper
+public class VersionWrapper: INotifyPropertyChanged
 {
     private readonly unsafe State* _state;
     private unsafe VersionErased* _version;
-    public bool Selected { get; set; }
+    private bool _selected;
+
+    public bool Selected
+    {
+        get => _selected; 
+        set => SetField(ref _selected, value);
+    }
 
     public VersionWrapper(SafeNativeMethods handle, nuint index)
     {
@@ -254,6 +263,20 @@ public class VersionWrapper
                 return NativeMethods.version_type(_version);
             }
         }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
+    private void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        field = value;
+        OnPropertyChanged(propertyName);
     }
 }
 
