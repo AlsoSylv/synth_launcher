@@ -195,6 +195,7 @@ public class VersionWrapper
 {
     private readonly unsafe State* _state;
     private unsafe VersionErased* _version;
+    public bool Selected { get; set; }
 
     public VersionWrapper(SafeNativeMethods handle, nuint index)
     {

@@ -65,20 +65,18 @@ public partial class MainWindow : Window
     
     private void VersionSelectBox_OnSelectionChanged(object? sender, SelectionChangedEventArgs _) {
         var versionBox = (ComboBox)sender!;
+        var version = (VersionWrapper)versionBox.SelectedItem!;
+        version.Selected = true;
+
         
-        if (_versionTask == null)
-        {
-            var index = versionBox.SelectedIndex;
-            _versionTask = _versionWrappers[index].GetJson(_token.Token);
-        }
-        else
+
+        if (_versionTask != null)
         {
             if (!_versionTask.IsCompleted) _token.Cancel();
             _token.TryReset();
-
-            var index = versionBox.SelectedIndex;
-            _versionTask = _versionWrappers[index].GetJson(_token.Token);
         }
+        
+        _versionTask = version.GetJson(_token.Token);
     }
 
     private void Button_OnClick(object? sender, RoutedEventArgs _) {
@@ -191,11 +189,5 @@ public partial class MainWindow : Window
         if (index < 0) return;
         _accounts.RemoveAt(index);
         _handle.RemoveAccount((nuint) index);
-    }
-
-    private void InputElement_OnGotFocus(object? sender, GotFocusEventArgs e)
-    {
-        var stack = (StackPanel)sender!;
-        stack.Children[0].IsEnabled = true;
     }
 }

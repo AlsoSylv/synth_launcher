@@ -14,17 +14,14 @@
                           HorizontalAlignment="Stretch">
                     <ComboBox.ItemTemplate>
                         <DataTemplate x:DataType="csGui:VersionWrapper">
-                            <StackPanel GotFocus="InputElement_OnGotFocus">
-                                <Label Content="{Binding #VersionSelectBox.PlaceholderText}" IsVisible="False">
+                            <StackPanel>
+                                <Label Content="{Binding #VersionSelectBox.PlaceholderText}" IsVisible="{Binding Selected}">
                                     <Label.Styles>
                                         <Style Selector="Label">
                                             <Setter Property="FontSize" Value="10"/>
                                             <Setter Property="Background" Value="Transparent"/>
                                             <Setter Property="HorizontalContentAlignment" Value="Left"/> 
                                             <Setter Property="VerticalContentAlignment" Value="Top"/>
-                                            <Style Selector="^:is:selected">
-                                                <Setter Property="IsVisible" Value="True"></Setter>
-                                            </Style>
                                         </Style>
                                     </Label.Styles>
                                 </Label>
