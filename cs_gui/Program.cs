@@ -191,6 +191,71 @@ public class JarTask {
     public double Percentage => (double) _finished / _total;
 }
 
+public class VersionWrapper
+{
+    private readonly unsafe State* _state;
+    private unsafe VersionErased* _version;
+
+    public VersionWrapper(SafeNativeMethods handle, nuint index)
+    {
+        unsafe
+        {
+            _state = handle.State;
+            _version = NativeMethods.get_version(_state, index);
+        }
+    }
+    
+    public Task GetJson(CancellationToken token) =>
+        Task.Run(() => {
+            unsafe {
+                token.ThrowIfCancellationRequested();
+                var versionTaskPointer = NativeMethods.get_version_task(_state, _version);
+                while (!NativeMethods.poll_version_task(versionTaskPointer)) {
+                    if (!token.IsCancellationRequested) continue;
+                    NativeMethods.cancel_version_task(versionTaskPointer);
+                    token.ThrowIfCancellationRequested();
+                }
+
+                var value = NativeMethods.await_version_task(_state, versionTaskPointer);
+                if (value.code != Code.Success) throw new RustException(value);
+
+                if (token.IsCancellationRequested) return;
+
+                var assetIndexTaskPointer = NativeMethods.get_asset_index(_state);
+                while (!NativeMethods.poll_asset_index(assetIndexTaskPointer)) {
+                    if (!token.IsCancellationRequested) continue;
+                    NativeMethods.cancel_asset_index(assetIndexTaskPointer);
+                    token.ThrowIfCancellationRequested();
+                }
+
+                var v = NativeMethods.await_asset_index(_state, assetIndexTaskPointer);
+                if (v.code != Code.Success) throw new RustException(v);
+            }
+        }, token);
+
+    public string Name
+    {
+        get
+        {
+            unsafe
+            {
+                return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.version_name(_version)));
+            }
+        }
+    }
+
+    public ReleaseType Type
+    {
+        get
+        {
+            unsafe
+            {
+                return NativeMethods.version_type(_version);
+            }
+        }
+    }
+}
+
 public class SafeNativeMethods {
     internal readonly unsafe State* State;
 
@@ -248,40 +313,6 @@ public class SafeNativeMethods {
             return Program.CopyRefString(NativeMethods.get_name(State, index));
         }
     }
-
-    public ReleaseType GetVersionType(nuint index) {
-        unsafe {
-            return NativeMethods.get_type(State, index);
-        }
-    }
-
-    public Task GetVersion(nuint index, CancellationToken token) =>
-        Task.Run(() => {
-            unsafe {
-                token.ThrowIfCancellationRequested();
-                var versionTaskPointer = NativeMethods.get_version_task(State, index);
-                while (!NativeMethods.poll_version_task(versionTaskPointer)) {
-                    if (!token.IsCancellationRequested) continue;
-                    NativeMethods.cancel_version_task(versionTaskPointer);
-                    token.ThrowIfCancellationRequested();
-                }
-
-                var value = NativeMethods.await_version_task(State, versionTaskPointer);
-                if (value.code != Code.Success) throw new RustException(value);
-
-                if (token.IsCancellationRequested) return;
-
-                var assetIndexTaskPointer = NativeMethods.get_asset_index(State);
-                while (!NativeMethods.poll_asset_index(assetIndexTaskPointer)) {
-                    if (!token.IsCancellationRequested) continue;
-                    NativeMethods.cancel_asset_index(assetIndexTaskPointer);
-                    token.ThrowIfCancellationRequested();
-                }
-
-                var v = NativeMethods.await_asset_index(State, assetIndexTaskPointer);
-                if (v.code != Code.Success) throw new RustException(v);
-            }
-        }, token);
     
     public Task Auth(CancellationToken token) =>
         Task.Run(() => {

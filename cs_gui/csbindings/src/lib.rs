@@ -12,7 +12,7 @@ use launcher_core::account::types::{
     Account, AuthorizationTokenResponse, DeviceCodeResponse, MinecraftAuthenticationResponse,
     Profile,
 };
-use launcher_core::types::{AssetIndexJson, Version, VersionJson};
+use launcher_core::types::{AssetIndexJson, Type, Version, VersionJson};
 use launcher_core::{AsyncLauncher, Error};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -24,7 +24,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 use tokio::runtime::Runtime;
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Default, Deserialize, Serialize, Debug)]
 pub struct LauncherData {
     jvms: Vec<Jvm>,
     accounts: Vec<AccRefreshPair>,
@@ -54,6 +54,8 @@ pub struct Instance {
 }
 
 mod state {
+    use std::fs::File;
+    use std::io::Write;
     use crate::LauncherData;
     use launcher_core::account::types::DeviceCodeResponse;
     use launcher_core::types::{AssetIndexJson, VersionJson, VersionManifest};
@@ -73,15 +75,22 @@ mod state {
 
     impl State {
         pub fn new(path_buf: PathBuf) -> Self {
-            let config: LauncherData = toml::de::from_str(
-                &std::fs::read_to_string(path_buf.join("launcher_data.toml")).unwrap(),
-            )
-            .unwrap();
+            let path = path_buf.join("launcher_data.toml");
+            let data = if !path.exists() {
+                let mut file = File::create(&path).unwrap();
+                let default = LauncherData::default();
+                file.write_all(toml::to_string_pretty(&default).unwrap().as_bytes()).unwrap();
+                default
+            } else {
+                toml::de::from_str(
+                    &std::fs::read_to_string(path).unwrap(),
+                ).unwrap()
+            };
             Self {
                 version_manifest: empty_lock(),
                 selected_version: empty_lock(),
                 asset_index: empty_lock(),
-                data: RwLock::new(config),
+                data: RwLock::new(data),
                 class_path: None,
                 jar_path: None,
                 path: path_buf,
@@ -159,39 +168,18 @@ pub enum ReleaseType {
     Snapshot,
 }
 
-impl From<launcher_core::types::Type> for ReleaseType {
-    fn from(value: launcher_core::types::Type) -> Self {
+impl From<Type> for ReleaseType {
+    fn from(value: Type) -> Self {
         match value {
-            launcher_core::types::Type::OldAlpha => ReleaseType::OldAlpha,
-            launcher_core::types::Type::OldBeta => ReleaseType::OldBeta,
-            launcher_core::types::Type::Release => ReleaseType::Release,
-            launcher_core::types::Type::Snapshot => ReleaseType::Snapshot,
+            Type::OldAlpha => ReleaseType::OldAlpha,
+            Type::OldBeta => ReleaseType::OldBeta,
+            Type::Release => ReleaseType::Release,
+            Type::Snapshot => ReleaseType::Snapshot,
         }
     }
 }
 
-#[repr(C)]
-pub struct DeviceCode {
-    pub user_code: OwnedStringWrapper,
-    pub device_code: OwnedStringWrapper,
-    pub verification_uri: OwnedStringWrapper,
-    pub expires_in: u32,
-    pub interval: u64,
-    pub message: OwnedStringWrapper,
-}
-
-impl From<DeviceCodeResponse> for DeviceCode {
-    fn from(value: DeviceCodeResponse) -> Self {
-        DeviceCode {
-            user_code: value.user_code.into(),
-            device_code: value.device_code.into(),
-            verification_uri: value.verification_uri.into(),
-            expires_in: value.expires_in,
-            interval: value.interval,
-            message: value.message.into(),
-        }
-    }
-}
+pub struct VersionErased;
 
 #[repr(C)]
 pub struct RefStringWrapper {
@@ -242,6 +230,7 @@ impl OwnedStringWrapper {
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 /// # Safety
 pub extern "C" fn new_rust_state(path: *const u16, len: usize) -> *mut State {
     assert_ne!(path, null());
@@ -251,6 +240,9 @@ pub extern "C" fn new_rust_state(path: *const u16, len: usize) -> *mut State {
 
     let path = String::from_utf16(slice).unwrap();
     let path = PathBuf::from(path).join("synth_launcher");
+    if !path.exists() {
+        std::fs::create_dir(&path).unwrap();
+    }
     Box::leak(Box::new(State::new(path)))
 }
 
@@ -342,16 +334,6 @@ pub unsafe extern "C" fn is_manifest_null(state: *mut State) -> bool {
 
 #[no_mangle]
 /// # Safety
-pub unsafe extern "C" fn get_type(state: *mut State, index: usize) -> ReleaseType {
-    let manifest = state.as_ref().unwrap().version_manifest.blocking_read();
-
-    manifest.as_ref().unwrap().versions[index]
-        .version_type
-        .into()
-}
-
-#[no_mangle]
-/// # Safety
 /// # The owned string wrapper cannot have been mutated outside the rust code
 pub unsafe extern "C" fn free_owned_string_wrapper(string_wrapper: OwnedStringWrapper) {
     drop(String::from_raw_parts(
@@ -363,21 +345,46 @@ pub unsafe extern "C" fn free_owned_string_wrapper(string_wrapper: OwnedStringWr
 
 #[no_mangle]
 /// # Safety
+/// # State cannot be null, index cannot be greater than mainfest len
+/// # The lifetime of this pointer is the same as the version manifest
+pub unsafe extern "C" fn get_version(state: *const State, index: usize) -> *const VersionErased {
+    let state = unsafe { &*state };
+    &state
+        .version_manifest
+        .blocking_read()
+        .as_ref()
+        .unwrap()
+        .versions[index] as *const Version as *const _
+}
+
+#[no_mangle]
+/// # Safety
+/// # version cannot be null and must point to a valid version
+pub unsafe extern "C" fn version_name(version: *const VersionErased) -> RefStringWrapper {
+    let version = &*(version as *const Version);
+    version.id.as_str().into()
+}
+
+#[no_mangle]
+/// # Safety
+/// # version cannot be null and must point to a valid version
+pub unsafe extern "C" fn version_type(version: *const VersionErased) -> ReleaseType {
+    let version = &*(version as *const Version);
+    version.version_type.into()
+}
+
+#[no_mangle]
+/// # Safety
 pub unsafe extern "C" fn get_version_task(
     state: *mut State,
-    index: usize,
+    version: *const VersionErased,
 ) -> *mut TaskWrapper<Result<VersionJson, Error>> {
     let state = &*state;
+    let version = &*(version as *const Version);
     get_task(async move {
-        let manifest = state.version_manifest.read().await;
-        if let Some(manifest) = &*manifest {
-            let version = &manifest.versions[index];
-            launcher()
-                .get_version_json(version, &state.path.join("versions"))
-                .await
-        } else {
-            panic!("Guh")
-        }
+        launcher()
+            .get_version_json(version, &state.path.join("versions"))
+            .await
     })
 }
 
@@ -789,8 +796,7 @@ pub unsafe extern "C" fn try_refresh(
         let guard = state.data.read().await;
         let profile = &guard.accounts[index];
 
-        let refresh = refresh_token_response(client(), &profile.refresh_token, CLIENT_ID)
-            .await?;
+        let refresh = refresh_token_response(client(), &profile.refresh_token, CLIENT_ID).await?;
         auth(refresh).await.map(|a| (a, index))
     })
 }

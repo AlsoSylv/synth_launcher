@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private readonly CancellationTokenSource _token = new();
     private readonly ObservableCollection<string> _accounts;
     private readonly ObservableCollection<string> _jvms;
+    private readonly ObservableCollection<VersionWrapper> _versionWrappers;
     private SafeNativeMethods _handle;
 
     public MainWindow()
@@ -23,6 +24,7 @@ public partial class MainWindow : Window
         _handle = new SafeNativeMethods();
         _accounts = new ObservableCollection<string>();
         _jvms = new ObservableCollection<string> { "Default" };
+        _versionWrappers = new ObservableCollection<VersionWrapper>();
 
         InitializeComponent();
         var task = _handle.GetManifest();
@@ -41,12 +43,11 @@ public partial class MainWindow : Window
             try
             {
                 await task;
-                var list = new ObservableCollection<string>();
-                VersionSelectBox.ItemsSource = list;
+                VersionSelectBox.ItemsSource = _versionWrappers;
                 var len = _handle.ManifestLength;
                 
                 for (UIntPtr idx = 0; idx < len; idx++)
-                    list.Add(Encoding.UTF8.GetString(_handle.GetVersionId(idx)));
+                    _versionWrappers.Add(new VersionWrapper(_handle, idx));
                 
                 VersionSelectBox.IsEnabled = true;
             }
@@ -68,7 +69,7 @@ public partial class MainWindow : Window
         if (_versionTask == null)
         {
             var index = versionBox.SelectedIndex;
-            _versionTask = _handle.GetVersion((nuint)index, _token.Token);
+            _versionTask = _versionWrappers[index].GetJson(_token.Token);
         }
         else
         {
@@ -76,7 +77,7 @@ public partial class MainWindow : Window
             _token.TryReset();
 
             var index = versionBox.SelectedIndex;
-            _versionTask = _handle.GetVersion((nuint)index, _token.Token);
+            _versionTask = _versionWrappers[index].GetJson(_token.Token);
         }
     }
 
