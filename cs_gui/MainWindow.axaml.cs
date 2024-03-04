@@ -34,9 +34,6 @@ public partial class MainWindow : Window
         AccountSelector.ItemsSource = _accounts;
         JvmSelector.ItemsSource = _jvms;
         JvmSelector.SelectedIndex = 0;
-
-        for (nuint i = 0; i < _handle.AccountLength; i++) _accounts.Add(_handle.GetAccountName(i));
-        for (nuint i = 0; i < _handle.JvmLen; i++) _jvms.Add(_handle.GetAccountName(i));
         
         VersionSelectBox.IsEnabled = false;
 
@@ -44,6 +41,9 @@ public partial class MainWindow : Window
         {
             try {
                 await getData;
+                for (nuint i = 0; i < _handle.AccountLength; i++) _accounts.Add(_handle.GetAccountName(i));
+                for (nuint i = 0; i < _handle.JvmLen; i++) _jvms.Add(_handle.GetAccountName(i));
+                
                 try
                 {
                     await task;

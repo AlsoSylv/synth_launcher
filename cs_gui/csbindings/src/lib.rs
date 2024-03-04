@@ -22,7 +22,7 @@ use std::slice;
 use std::sync::atomic::AtomicU64;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
 use instances::{Instance, Jvm};
 use error::Error;
@@ -970,11 +970,18 @@ fn profile_to_account(
 unsafe extern "C" fn read_data(state: *const State) -> *mut TaskWrapper<Result<LauncherData, Error>> {
     let state = &*state;
     get_task(async {
-        let path = &state.path;
+        let path = state.path.join("launcher_data.toml");
+        let exists = path.exists() && path.is_file();
         let mut file = tokio::fs::OpenOptions::new().create(true).write(true).read(true).open(path).await?;
-        let mut string = String::with_capacity(file.metadata().await?.len() as usize);
-        file.read_to_string(&mut string).await?;
-        Ok(toml::from_str(&string)?)
+        if exists {
+            let mut string = String::with_capacity(file.metadata().await?.len() as usize);
+            file.read_to_string(&mut string).await?;
+            Ok(toml::from_str(&string)?)
+        } else {
+            let default = LauncherData::default();
+            file.write_all(toml::to_string_pretty(&default).unwrap().as_bytes()).await?;
+            Ok(default)
+        }
     })
 }
 
