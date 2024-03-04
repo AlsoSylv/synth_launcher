@@ -12,7 +12,7 @@ use launcher_core::account::types::{
     Account, AuthorizationTokenResponse, DeviceCodeResponse, MinecraftAuthenticationResponse,
     Profile,
 };
-use launcher_core::types::{AssetIndexJson, VersionJson, VersionManifest};
+use launcher_core::types::{AssetIndexJson, VersionJson, VersionManifest, Version};
 use launcher_core::{account, AsyncLauncher};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
