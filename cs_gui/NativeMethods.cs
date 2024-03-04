@@ -54,17 +54,25 @@ namespace CsBindgen
         [return: MarshalAs(UnmanagedType.U1)]
         public static extern bool is_manifest_null(State* state);
 
-        /// <summary># Safety</summary>
-        [DllImport(__DllName, EntryPoint = "get_type", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern ReleaseType get_type(State* state, nuint index);
-
         /// <summary># Safety # The owned string wrapper cannot have been mutated outside the rust code</summary>
         [DllImport(__DllName, EntryPoint = "free_owned_string_wrapper", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern void free_owned_string_wrapper(OwnedStringWrapper string_wrapper);
 
+        /// <summary># Safety # State cannot be null, index cannot be greater than mainfest len # The lifetime of this pointer is the same as the version manifest</summary>
+        [DllImport(__DllName, EntryPoint = "get_version", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern VersionErased* get_version(State* state, nuint index);
+
+        /// <summary># Safety # version cannot be null and must point to a valid version</summary>
+        [DllImport(__DllName, EntryPoint = "version_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern RefStringWrapper version_name(VersionErased* version);
+
+        /// <summary># Safety # version cannot be null and must point to a valid version</summary>
+        [DllImport(__DllName, EntryPoint = "version_type", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern ReleaseType version_type(VersionErased* version);
+
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "get_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern TaskWrapper* get_version_task(State* state, nuint index);
+        public static extern TaskWrapper* get_version_task(State* state, VersionErased* version);
 
         /// <summary># Safety # The task cannot be null, and has to be a version task. # The type cannot be checked by the Rust or C# compiler, and must instead be checked by the programmer.</summary>
         [DllImport(__DllName, EntryPoint = "poll_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -257,6 +265,11 @@ namespace CsBindgen
     {
         public Code code;
         public OwnedStringWrapper error;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public unsafe partial struct VersionErased
+    {
     }
 
     [StructLayout(LayoutKind.Sequential)]

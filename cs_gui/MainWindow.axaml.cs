@@ -4,6 +4,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 
@@ -15,6 +16,8 @@ public partial class MainWindow : Window
     private readonly CancellationTokenSource _token = new();
     private readonly ObservableCollection<string> _accounts;
     private readonly ObservableCollection<string> _jvms;
+    private readonly ObservableCollection<VersionWrapper> _versionWrappers;
+    private VersionWrapper? _lastSelected;
     private SafeNativeMethods _handle;
 
     public MainWindow()
@@ -22,6 +25,7 @@ public partial class MainWindow : Window
         _handle = new SafeNativeMethods();
         _accounts = new ObservableCollection<string>();
         _jvms = new ObservableCollection<string> { "Default" };
+        _versionWrappers = new ObservableCollection<VersionWrapper>();
 
         InitializeComponent();
         var getData = _handle.GetData();
@@ -43,12 +47,11 @@ public partial class MainWindow : Window
                 try
                 {
                     await task;
-                    var list = new ObservableCollection<string>();
-                    VersionSelectBox.ItemsSource = list;
+                    VersionSelectBox.ItemsSource = _versionWrappers;
                     var len = _handle.ManifestLength;
-                
-                    for (UIntPtr idx = 0; idx < len; idx++)
-                        list.Add(Encoding.UTF8.GetString(_handle.GetVersionId(idx)));
+
+                for (UIntPtr idx = 0; idx < len; idx++)
+                    _versionWrappers.Add(new VersionWrapper(_handle, idx));
                 
                     VersionSelectBox.IsEnabled = true;
                 }
@@ -71,19 +74,24 @@ public partial class MainWindow : Window
     
     private void VersionSelectBox_OnSelectionChanged(object? sender, SelectionChangedEventArgs _) {
         var versionBox = (ComboBox)sender!;
-        if (_versionTask == null)
+        var version = (VersionWrapper)versionBox.SelectedItem!;
+
+        if (_lastSelected != null)
         {
-            var index = versionBox.SelectedIndex;
-            _versionTask = _handle.GetVersion((nuint)index, _token.Token);
+            _lastSelected.Selected = false;
         }
-        else
+
+        _lastSelected = version;
+
+        version.Selected = true;
+
+        if (_versionTask != null)
         {
             if (!_versionTask.IsCompleted) _token.Cancel();
             _token.TryReset();
-
-            var index = versionBox.SelectedIndex;
-            _versionTask = _handle.GetVersion((nuint)index, _token.Token);
         }
+
+        _versionTask = version.GetJson(_token.Token);
     }
 
     private void Button_OnClick(object? sender, RoutedEventArgs _) {

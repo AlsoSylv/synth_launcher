@@ -1,6 +1,5 @@
-mod internal;
-
 use internal::*;
+mod internal;
 use state::State;
 use tasks::{
     await_task, cancel_task, get_task, poll_task,
@@ -30,7 +29,7 @@ use error::Error;
 
 pub use tasks::TaskWrapper;
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Default, Deserialize, Serialize, Debug)]
 pub struct LauncherData {
     jvms: Vec<Jvm>,
     accounts: Vec<AccRefreshPair>,
@@ -125,6 +124,8 @@ impl From<launcher_core::types::Type> for ReleaseType {
     }
 }
 
+pub struct VersionErased;
+
 #[repr(C)]
 pub struct RefStringWrapper {
     pub char_ptr: *const u8,
@@ -174,6 +175,7 @@ impl OwnedStringWrapper {
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 /// # Safety
 pub extern "C" fn new_rust_state(path: *const u16, len: usize) -> *mut State {
     assert_ne!(path, null());
@@ -276,16 +278,6 @@ pub unsafe extern "C" fn is_manifest_null(state: *mut State) -> bool {
 
 #[no_mangle]
 /// # Safety
-pub unsafe extern "C" fn get_type(state: *mut State, index: usize) -> ReleaseType {
-    let manifest = state.as_ref().unwrap().version_manifest.blocking_read();
-
-    manifest.as_ref().unwrap().versions[index]
-        .version_type
-        .into()
-}
-
-#[no_mangle]
-/// # Safety
 /// # The owned string wrapper cannot have been mutated outside the rust code
 pub unsafe extern "C" fn free_owned_string_wrapper(string_wrapper: OwnedStringWrapper) {
     drop(String::from_raw_parts(
@@ -297,23 +289,48 @@ pub unsafe extern "C" fn free_owned_string_wrapper(string_wrapper: OwnedStringWr
 
 #[no_mangle]
 /// # Safety
+/// # State cannot be null, index cannot be greater than mainfest len
+/// # The lifetime of this pointer is the same as the version manifest
+pub unsafe extern "C" fn get_version(state: *const State, index: usize) -> *const VersionErased {
+    let state = unsafe { &*state };
+    &state
+        .version_manifest
+        .blocking_read()
+        .as_ref()
+        .unwrap()
+        .versions[index] as *const Version as *const _
+}
+
+#[no_mangle]
+/// # Safety
+/// # version cannot be null and must point to a valid version
+pub unsafe extern "C" fn version_name(version: *const VersionErased) -> RefStringWrapper {
+    let version = &*(version as *const Version);
+    version.id.as_str().into()
+}
+
+#[no_mangle]
+/// # Safety
+/// # version cannot be null and must point to a valid version
+pub unsafe extern "C" fn version_type(version: *const VersionErased) -> ReleaseType {
+    let version = &*(version as *const Version);
+    version.version_type.into()
+}
+
+#[no_mangle]
+/// # Safety
 pub unsafe extern "C" fn get_version_task(
     state: *mut State,
-    index: usize,
+    version: *const VersionErased,
 ) -> *mut TaskWrapper<Result<VersionJson, Error>> {
     let state = &*state;
+    let version = &*(version as *const Version);
     get_task(async move {
-        let manifest = state.version_manifest.read().await;
-        if let Some(manifest) = &*manifest {
-            let version = &manifest.versions[index];
-            Ok(
-                launcher()
-                    .get_version_json(version, &state.path.join("versions"))
-                    .await?
-            )
-        } else {
-            panic!("Guh")
-        }
+        Ok(
+            launcher()
+                .get_version_json(version, &state.path.join("versions"))
+                .await?
+        )
     })
 }
 
@@ -733,8 +750,7 @@ pub unsafe extern "C" fn try_refresh(
         let guard = data;
         let profile = &guard.accounts[index];
 
-        let refresh = refresh_token_response(client(), &profile.refresh_token, CLIENT_ID)
-            .await?;
+        let refresh = refresh_token_response(client(), &profile.refresh_token, CLIENT_ID).await?;
         auth(refresh).await.map(|a| (a, index))
     })
 }
