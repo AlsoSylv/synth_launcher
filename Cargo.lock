@@ -1119,6 +1119,7 @@ dependencies = [
  "launcher_core",
  "reqwest",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
 ]

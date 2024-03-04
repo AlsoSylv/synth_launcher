@@ -28,7 +28,7 @@ pub struct Latest {
     pub snapshot: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Version {
     pub id: String,

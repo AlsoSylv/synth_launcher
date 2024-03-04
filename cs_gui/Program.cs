@@ -193,6 +193,7 @@ public class JarTask {
 
 public class SafeNativeMethods {
     internal readonly unsafe State* State;
+    private unsafe LauncherData* _data;
 
     public SafeNativeMethods() {
         var path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData).ToCharArray();
@@ -202,6 +203,20 @@ public class SafeNativeMethods {
             }
         }
     }
+
+    public Task GetData() => Task.Run(() => {
+        unsafe {
+            var taskPtr = NativeMethods.read_data(State);
+            while (!NativeMethods.poll_data(taskPtr)) { }
+
+            var v = NativeMethods.await_data(taskPtr);
+            if (v.code != Code.Success) {
+                throw new RustException(v);
+            }
+
+            _data = (LauncherData*)v.error.char_ptr;
+        }
+    });
     
     public Task GetManifest() =>
         Task.Run(() => {
@@ -306,7 +321,7 @@ public class SafeNativeMethods {
                     token.ThrowIfCancellationRequested();
                 }
 
-                var value = NativeMethods.await_auth_loop(State, taskPointer);
+                var value = NativeMethods.await_auth_loop(State, _data, taskPointer);
 
                 if (value.code != Code.Success) {
                     throw new RustException(value);
@@ -343,23 +358,23 @@ public class SafeNativeMethods {
     public nuint AccountLength {
         get {
             unsafe {
-                return NativeMethods.accounts_len(State);
+                return NativeMethods.accounts_len(_data);
             }
         }
     }
 
     public string GetAccountName(nuint index) {
         unsafe {
-            return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_account_name(State, index)));
+            return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.get_account_name(_data, index)));
         }
     }
 
     public Task RefreshAccount(nuint index) => Task.Run(() => {
         unsafe {
-            var task = NativeMethods.try_refresh(State, index);
+            var task = NativeMethods.try_refresh(_data, index);
             while (!NativeMethods.poll_refresh(task)) { }
 
-            var v = NativeMethods.await_refresh(State, task);
+            var v = NativeMethods.await_refresh(State, _data, task);
 
             if (v.code != Code.Success) throw new RustException(v);
         }
@@ -367,52 +382,52 @@ public class SafeNativeMethods {
 
     public bool NeedsRefresh(nuint index) {
         unsafe {
-            return NativeMethods.needs_refresh(State, index);
+            return NativeMethods.needs_refresh(_data, index);
         }
     }
 
     public void RemoveAccount(nuint index) {
         unsafe {
-            NativeMethods.remove_account(State, index);
+            NativeMethods.remove_account(_data, index);
         }
     }
 
     public nuint JvmLen {
         get {
             unsafe {
-                return NativeMethods.jvm_len(State);
+                return NativeMethods.jvm_len(_data);
             }
         }
     }
     
     public string GetJvmName(nuint index) {
         unsafe {
-            return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.jvm_name(State, index)));
+            return Encoding.UTF8.GetString(Program.CopyRefString(NativeMethods.jvm_name(_data, index)));
         }
     }
 
     public void AddJvm(string path) {
         unsafe {
             var arr = path.ToCharArray();
-            fixed (char* str = arr) NativeMethods.add_jvm(State, (ushort*)str, (nuint)arr.Length);
+            fixed (char* str = arr) NativeMethods.add_jvm(_data, (ushort*)str, (nuint)arr.Length);
         }
     }
 
     public void RemoveJvm(nuint index) {
         unsafe {
-            NativeMethods.remove_jvm(State, index);
+            NativeMethods.remove_jvm(_data, index);
         }
     }
 
     public void Play(nuint jvmIndex, nuint accIndex) {
         unsafe {
-            NativeMethods.play(State, jvmIndex, accIndex);
+            NativeMethods.play(State, _data, jvmIndex, accIndex);
         }
     }
     
     public void Play(nuint accIndex) {
         unsafe {
-            NativeMethods.play_default_jvm(State, accIndex);
+            NativeMethods.play_default_jvm(State, _data, accIndex);
         }
     }
 }

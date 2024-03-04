@@ -24,6 +24,7 @@ public partial class MainWindow : Window
         _jvms = new ObservableCollection<string> { "Default" };
 
         InitializeComponent();
+        var getData = _handle.GetData();
         var task = _handle.GetManifest();
         
         AccountSelector.ItemsSource = _accounts;
@@ -37,26 +38,33 @@ public partial class MainWindow : Window
 
         Dispatcher.UIThread.InvokeAsync(async () =>
         {
-            try
-            {
-                await task;
-                var list = new ObservableCollection<string>();
-                VersionSelectBox.ItemsSource = list;
-                var len = _handle.ManifestLength;
-                
-                for (UIntPtr idx = 0; idx < len; idx++)
-                    list.Add(Encoding.UTF8.GetString(_handle.GetVersionId(idx)));
-                
-                VersionSelectBox.IsEnabled = true;
-            }
-            catch (AggregateException ae)
-            {
-                ae.Handle(x =>
+            try {
+                await getData;
+                try
                 {
-                    if (x is not RustException) return false;
-                    Console.WriteLine(x);
-                    return true;
-                });
+                    await task;
+                    var list = new ObservableCollection<string>();
+                    VersionSelectBox.ItemsSource = list;
+                    var len = _handle.ManifestLength;
+                
+                    for (UIntPtr idx = 0; idx < len; idx++)
+                        list.Add(Encoding.UTF8.GetString(_handle.GetVersionId(idx)));
+                
+                    VersionSelectBox.IsEnabled = true;
+                }
+                catch (AggregateException ae)
+                {
+                    ae.Handle(x =>
+                    {
+                        if (x is not RustException) return false;
+                        Console.WriteLine(x);
+                        return true;
+                    });
+                }
+            }
+            catch (Exception e) {
+                // TODO: This needs to be handled properly, nothing else can happen if reading the saved state fails
+                Console.WriteLine(e);
             }
         });
     }

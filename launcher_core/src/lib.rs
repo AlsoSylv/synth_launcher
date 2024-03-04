@@ -27,7 +27,6 @@ pub struct AsyncLauncher {
 }
 
 #[derive(Debug)]
-#[repr(u32)]
 pub enum Error {
     Reqwest(reqwest::Error),
     Tokio(tokio::io::Error),

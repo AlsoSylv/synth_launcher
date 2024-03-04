@@ -141,10 +141,10 @@ namespace CsBindgen
         public static extern void cancel_jar(TaskWrapper* raw_task);
 
         [DllImport(__DllName, EntryPoint = "play", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void play(State* state, nuint jvm_index, nuint acc_index);
+        public static extern void play(State* state, LauncherData* data, nuint jvm_index, nuint acc_index);
 
         [DllImport(__DllName, EntryPoint = "play_default_jvm", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void play_default_jvm(State* state, nuint acc_index);
+        public static extern void play_default_jvm(State* state, LauncherData* data, nuint acc_index);
 
         [DllImport(__DllName, EntryPoint = "get_device_response", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern TaskWrapper* get_device_response();
@@ -177,7 +177,7 @@ namespace CsBindgen
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "await_auth_loop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern NativeReturn await_auth_loop(State* state, TaskWrapper* raw_task);
+        public static extern NativeReturn await_auth_loop(State* state, LauncherData* data, TaskWrapper* raw_task);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "cancel_auth_loop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -185,7 +185,7 @@ namespace CsBindgen
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "try_refresh", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern TaskWrapper* try_refresh(State* state, nuint index);
+        public static extern TaskWrapper* try_refresh(LauncherData* data, nuint index);
 
         [DllImport(__DllName, EntryPoint = "poll_refresh", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.U1)]
@@ -193,46 +193,62 @@ namespace CsBindgen
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "await_refresh", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern NativeReturn await_refresh(State* state, TaskWrapper* raw_task);
+        public static extern NativeReturn await_refresh(State* state, LauncherData* data, TaskWrapper* raw_task);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "accounts_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern nuint accounts_len(State* state);
+        public static extern nuint accounts_len(LauncherData* data);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "remove_account", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void remove_account(State* state, nuint index);
+        public static extern void remove_account(LauncherData* data, nuint index);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "get_account_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern RefStringWrapper get_account_name(State* state, nuint index);
+        public static extern RefStringWrapper get_account_name(LauncherData* data, nuint index);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "needs_refresh", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.U1)]
-        public static extern bool needs_refresh(State* state, nuint index);
+        public static extern bool needs_refresh(LauncherData* data, nuint index);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "jvm_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern nuint jvm_len(State* state);
+        public static extern nuint jvm_len(LauncherData* data);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "jvm_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern RefStringWrapper jvm_name(State* state, nuint index);
+        public static extern RefStringWrapper jvm_name(LauncherData* data, nuint index);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "add_jvm", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern NativeReturn add_jvm(State* state, ushort* ptr, nuint len);
+        public static extern NativeReturn add_jvm(LauncherData* data, ushort* ptr, nuint len);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "remove_jvm", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern void remove_jvm(State* state, nuint index);
+        public static extern void remove_jvm(LauncherData* data, nuint index);
+
+        [DllImport(__DllName, EntryPoint = "read_data", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern TaskWrapper* read_data(State* state);
+
+        [DllImport(__DllName, EntryPoint = "poll_data", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool poll_data(TaskWrapper* raw_task);
+
+        /// <summary>If this is a success, we smuggle the pointer through the error</summary>
+        [DllImport(__DllName, EntryPoint = "await_data", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern NativeReturn await_data(TaskWrapper* raw_task);
 
 
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    public unsafe partial struct State
+    public unsafe partial struct LauncherData
+    {
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public unsafe partial struct ManifestTaskWrapper
     {
     }
 
@@ -264,7 +280,7 @@ namespace CsBindgen
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    public unsafe partial struct ManifestTaskWrapper
+    public unsafe partial struct State
     {
     }
 
@@ -277,6 +293,7 @@ namespace CsBindgen
         SerdeError,
         ProfileError,
         JvmError,
+        TomlDe,
     }
 
     public enum ReleaseType : uint

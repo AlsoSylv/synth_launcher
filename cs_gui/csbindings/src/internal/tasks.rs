@@ -1,6 +1,4 @@
 use crate::{runtime, NativeReturn};
-use launcher_core::types::VersionManifest;
-use launcher_core::Error;
 use std::future::Future;
 use std::mem::ManuallyDrop;
 use tokio::task::JoinHandle;
@@ -24,11 +22,6 @@ impl<T> TaskWrapper<T> {
         Box::into_raw(Box::new(self))
     }
 }
-
-/// This exists so that task types can be checked on the C# side of the codebase
-pub struct ManifestTaskWrapper;
-/// This exists so I can type cast easier
-pub type ManifestTask = TaskWrapper<Result<VersionManifest, Error>>;
 
 #[inline]
 fn check_task_ptr<T>(task: *const TaskWrapper<T>) {
