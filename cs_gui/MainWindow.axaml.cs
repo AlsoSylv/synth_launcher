@@ -20,8 +20,7 @@ public partial class MainWindow : Window
     private VersionWrapper? _lastSelected;
     private SafeNativeMethods _handle;
 
-    public MainWindow()
-    {
+    public MainWindow() {
         _handle = new SafeNativeMethods();
         _accounts = new ObservableCollection<string>();
         _jvms = new ObservableCollection<string> { "Default" };
@@ -30,35 +29,30 @@ public partial class MainWindow : Window
         InitializeComponent();
         var getData = _handle.GetData();
         var task = _handle.GetManifest();
-        
+
         AccountSelector.ItemsSource = _accounts;
         JvmSelector.ItemsSource = _jvms;
         JvmSelector.SelectedIndex = 0;
-        
+
         VersionSelectBox.IsEnabled = false;
 
-        Dispatcher.UIThread.InvokeAsync(async () =>
-        {
+        Dispatcher.UIThread.InvokeAsync(async () => {
             try {
                 await getData;
                 for (nuint i = 0; i < _handle.AccountLength; i++) _accounts.Add(_handle.GetAccountName(i));
                 for (nuint i = 0; i < _handle.JvmLen; i++) _jvms.Add(_handle.GetAccountName(i));
-                
-                try
-                {
+
+                try {
                     await task;
                     VersionSelectBox.ItemsSource = _versionWrappers;
                     var len = _handle.ManifestLength;
 
-                for (UIntPtr idx = 0; idx < len; idx++)
-                    _versionWrappers.Add(new VersionWrapper(_handle, idx));
-                
+                    for (UIntPtr idx = 0; idx < len; idx++) _versionWrappers.Add(new VersionWrapper(_handle, idx));
+
                     VersionSelectBox.IsEnabled = true;
                 }
-                catch (AggregateException ae)
-                {
-                    ae.Handle(x =>
-                    {
+                catch (AggregateException ae) {
+                    ae.Handle(x => {
                         if (x is not RustException) return false;
                         Console.WriteLine(x);
                         return true;

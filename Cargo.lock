@@ -1115,6 +1115,7 @@ name = "csbindings"
 version = "0.1.0"
 dependencies = [
  "csbindgen",
+ "csmacros",
  "futures",
  "launcher_core",
  "reqwest",
@@ -1122,6 +1123,15 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "csmacros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.48",
 ]
 
 [[package]]

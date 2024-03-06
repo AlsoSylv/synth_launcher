@@ -1,9 +1,8 @@
 use internal::*;
 mod internal;
-use state::State;
-use tasks::{
-    await_task, cancel_task, get_task, poll_task,
-};
+use csmacros::dotnetfunction;
+use error::Error;
+use instances::{Instance, Jvm};
 use launcher_core::account::auth::{
     authorization_token_response, minecraft_profile_response, minecraft_response,
     refresh_token_response, xbox_response, xbox_security_token_response,
@@ -12,21 +11,22 @@ use launcher_core::account::types::{
     Account, AuthorizationTokenResponse, DeviceCodeResponse, MinecraftAuthenticationResponse,
     Profile,
 };
-use launcher_core::types::{AssetIndexJson, VersionJson, VersionManifest, Version};
+use launcher_core::types::{AssetIndexJson, Version, VersionJson, VersionManifest};
 use launcher_core::{account, AsyncLauncher};
 use serde::{Deserialize, Serialize};
+use state::State;
 use std::fmt::Display;
 use std::path::PathBuf;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::slice;
 use std::sync::atomic::AtomicU64;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
+use tasks::{await_task, cancel_task, get_task, poll_task};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
-use instances::{Instance, Jvm};
-use error::Error;
 
+use crate::internal::tasks::await_result_task;
 pub use tasks::TaskWrapper;
 
 #[derive(Default, Deserialize, Serialize, Debug)]
@@ -94,7 +94,7 @@ impl From<Error> for NativeReturn {
             Error::Reqwest(e) => (Code::RequestError, e),
             Error::Tokio(e) => (Code::IOError, e),
             Error::SerdeJson(e) => (Code::SerdeError, e),
-            Error::ProfileError(e) => (Code::ProfileError, e),
+            Error::Profile(e) => (Code::ProfileError, e),
             Error::TomlDe(e) => (Code::TomlDe, e),
         };
 
@@ -174,29 +174,25 @@ impl OwnedStringWrapper {
     }
 }
 
-#[no_mangle]
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-/// # Safety
-pub extern "C" fn new_rust_state(path: *const u16, len: usize) -> *mut State {
-    assert_ne!(path, null());
-    assert_eq!(path.align_offset(std::mem::align_of::<*const u16>()), 0);
-
-    let slice = unsafe { slice::from_raw_parts(path, len) };
-
-    let path = String::from_utf16(slice).unwrap();
-    let path = PathBuf::from(path).join("synth_launcher");
-    Box::leak(Box::new(State::new(path)))
+#[dotnetfunction]
+pub unsafe fn new_rust_state(raw_path: String) -> *mut State {
+    if let Ok(path) = raw_path {
+        let path = PathBuf::from(path).join("synth_launcher");
+        Box::leak(Box::new(State::new(path)))
+    } else {
+        null_mut()
+    }
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn get_version_manifest(state: *mut State) -> *mut ManifestTaskWrapper {
+pub unsafe fn get_version_manifest(state: *mut State) -> *mut ManifestTaskWrapper {
     let state = &*state;
     get_task(async {
         Ok::<_, Error>(
             launcher()
                 .get_version_manifest(&state.path.join("versions"))
-                .await?
+                .await?,
         )
     }) as _
 }
@@ -221,15 +217,12 @@ pub unsafe extern "C" fn await_version_manifest(
     state: *mut State,
     raw_task: *mut ManifestTaskWrapper,
 ) -> NativeReturn {
-    await_task(raw_task as *mut ManifestTask, |inner| match inner {
-        Ok(manifest) => {
-            let state = &*state;
-            let mut lock = state.version_manifest.blocking_write();
-            *lock = Some(manifest);
-            drop(lock);
-            NativeReturn::success()
-        }
-        Err(e) => e.into(),
+    await_result_task(raw_task as *mut ManifestTask, |inner| {
+        let state = &*state;
+        let mut lock = state.version_manifest.blocking_write();
+        *lock = Some(inner);
+        drop(lock);
+        NativeReturn::success()
     })
 }
 
@@ -326,11 +319,9 @@ pub unsafe extern "C" fn get_version_task(
     let state = &*state;
     let version = &*(version as *const Version);
     get_task(async move {
-        Ok(
-            launcher()
-                .get_version_json(version, &state.path.join("versions"))
-                .await?
-        )
+        Ok(launcher()
+            .get_version_json(version, &state.path.join("versions"))
+            .await?)
     })
 }
 
@@ -351,14 +342,11 @@ pub unsafe extern "C" fn await_version_task(
     raw_task: *mut TaskWrapper<Result<VersionJson, Error>>,
 ) -> NativeReturn {
     let state = &*state;
-    await_task(raw_task, |inner| match inner {
-        Ok(version) => {
-            let mut writer = state.selected_version.blocking_write();
-            *writer = Some(version);
-            drop(writer);
-            NativeReturn::success()
-        }
-        Err(e) => e.into(),
+    await_result_task(raw_task, |inner| {
+        let mut writer = state.selected_version.blocking_write();
+        *writer = Some(inner);
+        drop(writer);
+        NativeReturn::success()
     })
 }
 
@@ -382,11 +370,9 @@ pub unsafe extern "C" fn get_asset_index(
         let path = &state.path.join("assets");
         let tmp = version.read().await;
         let version = tmp.as_ref().unwrap();
-        Ok(
-            launcher()
-                .get_asset_index_json(&version.asset_index, path)
-                .await?
-        )
+        Ok(launcher()
+            .get_asset_index_json(&version.asset_index, path)
+            .await?)
     })
 }
 
@@ -405,14 +391,11 @@ pub unsafe extern "C" fn await_asset_index(
     raw_task: *mut TaskWrapper<Result<AssetIndexJson, Error>>,
 ) -> NativeReturn {
     let state = &*state;
-    await_task(raw_task, |inner| match inner {
-        Ok(version) => {
-            let mut writer = state.asset_index.blocking_write();
-            *writer = Some(version);
-            drop(writer);
-            NativeReturn::success()
-        }
-        Err(e) => e.into(),
+    await_result_task(raw_task, |inner| {
+        let mut writer = state.asset_index.blocking_write();
+        *writer = Some(inner);
+        drop(writer);
+        NativeReturn::success()
     })
 }
 
@@ -438,17 +421,15 @@ pub unsafe extern "C" fn get_libraries(
     get_task(async move {
         let binding = state.selected_version.read().await;
         let version = binding.as_ref().unwrap();
-        Ok(
-            launcher()
-                .download_libraries_and_get_path(
-                    version.libraries(),
-                    &state.path.join("libraries"),
-                    &state.path.join("natives"),
-                    total,
-                    finished,
-                )
-                .await?
-        )
+        Ok(launcher()
+            .download_libraries_and_get_path(
+                version.libraries(),
+                &state.path.join("libraries"),
+                &state.path.join("natives"),
+                total,
+                finished,
+            )
+            .await?)
     })
 }
 
@@ -463,13 +444,10 @@ pub unsafe extern "C" fn await_libraries(
     state: *mut State,
     raw_task: *mut TaskWrapper<Result<String, Error>>,
 ) -> NativeReturn {
-    await_task(raw_task, |inner| match inner {
-        Ok(class_path) => {
-            let state = &mut *state;
-            state.class_path = Some(class_path);
-            NativeReturn::success()
-        }
-        Err(e) => e.into(),
+    await_result_task(raw_task, |inner| {
+        let state = &mut *state;
+        state.class_path = Some(inner);
+        NativeReturn::success()
     })
 }
 
@@ -492,16 +470,14 @@ pub unsafe extern "C" fn get_assets(
     get_task(async move {
         let binding = state.asset_index.read().await;
         let asset_index = binding.as_ref().unwrap();
-        Ok(
-            launcher()
-                .download_and_store_asset_index(
-                    asset_index,
-                    &state.path.join("assets"),
-                    total,
-                    finished,
-                )
-                .await?
-        )
+        Ok(launcher()
+            .download_and_store_asset_index(
+                asset_index,
+                &state.path.join("assets"),
+                total,
+                finished,
+            )
+            .await?)
     })
 }
 
@@ -512,13 +488,7 @@ pub extern "C" fn poll_assets(raw_task: *const TaskWrapper<Result<(), Error>>) -
 
 #[no_mangle]
 pub extern "C" fn await_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) -> NativeReturn {
-    await_task(raw_task, |inner| {
-        if let Err(e) = inner {
-            e.into()
-        } else {
-            NativeReturn::success()
-        }
-    })
+    await_result_task(raw_task, |_| NativeReturn::success())
 }
 
 #[no_mangle]
@@ -539,11 +509,9 @@ pub unsafe extern "C" fn get_jar(
     get_task(async move {
         let binding = &state.selected_version.read().await;
         let version = binding.as_ref().unwrap();
-        Ok(
-            launcher()
-                .download_jar(version, &state.path.join("versions"), total, finished)
-                .await?
-        )
+        Ok(launcher()
+            .download_jar(version, &state.path.join("versions"), total, finished)
+            .await?)
     })
 }
 
@@ -558,12 +526,9 @@ pub unsafe extern "C" fn await_jar(
     state: *mut State,
     raw_task: *mut TaskWrapper<Result<String, Error>>,
 ) -> NativeReturn {
-    await_task(raw_task, |inner| match inner {
-        Ok(path) => {
-            (*state).jar_path = Some(path);
-            NativeReturn::success()
-        }
-        Err(e) => e.into(),
+    await_result_task(raw_task, |inner| {
+        (*state).jar_path = Some(inner);
+        NativeReturn::success()
     })
 }
 
@@ -573,7 +538,12 @@ pub extern "C" fn cancel_jar(raw_task: *mut TaskWrapper<Result<String, Error>>) 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn play(state: *const State, data: *const LauncherData, jvm_index: usize, acc_index: usize) {
+pub unsafe extern "C" fn play(
+    state: *const State,
+    data: *const LauncherData,
+    jvm_index: usize,
+    acc_index: usize,
+) {
     let state = &*state;
     let guard = &*data;
     let jvm = &guard.jvms[jvm_index];
@@ -598,7 +568,11 @@ pub unsafe extern "C" fn play(state: *const State, data: *const LauncherData, jv
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn play_default_jvm(state: *const State, data: *const LauncherData, acc_index: usize) {
+pub unsafe extern "C" fn play_default_jvm(
+    state: *const State,
+    data: *const LauncherData,
+    acc_index: usize,
+) {
     let state = &*state;
     let guard = &*data;
     let acc = &guard.accounts[acc_index];
@@ -642,14 +616,11 @@ pub unsafe extern "C" fn await_device_response(
     state: *mut State,
     raw_task: *mut TaskWrapper<Result<DeviceCodeResponse, Error>>,
 ) -> NativeReturn {
-    await_task(raw_task, |inner| match inner {
-        Ok(response) => {
-            let state = &mut *state;
-            state.device_code = Some(response);
+    await_result_task(raw_task, |inner| {
+        let state = &mut *state;
+        state.device_code = Some(inner);
 
-            NativeReturn::success()
-        }
-        Err(e) => e.into(),
+        NativeReturn::success()
     })
 }
 
@@ -709,25 +680,23 @@ pub unsafe extern "C" fn await_auth_loop(
     data: *mut LauncherData,
     raw_task: *mut TaskWrapper<Result<AccRefreshPair, Error>>,
 ) -> NativeReturn {
-    await_task(raw_task, |inner| match inner {
-        Ok(response) => {
-            let data = &mut *data;
-            for account in &mut data.accounts {
-                if account.account.profile.id == response.account.profile.id {
-                    *account = response;
-                    return NativeReturn::success();
-                }
+    await_result_task(raw_task, |inner| {
+        let data = &mut *data;
+        for account in &mut data.accounts {
+            if account.account.profile.id == inner.account.profile.id {
+                *account = inner;
+                return NativeReturn::success();
             }
-
-            data.accounts.push(response);
-            std::fs::write(
-                (&*state).path.join("launcher_data.toml"),
-                toml::to_string_pretty(&data).unwrap().as_bytes(),
-            )
-            .unwrap();
-            NativeReturn::success()
         }
-        Err(e) => e.into(),
+
+        data.accounts.push(inner);
+        if let Err(e) = std::fs::write(
+            (&*state).path.join("launcher_data.toml"),
+            toml::to_string_pretty(&data).unwrap().as_bytes(),
+        ) {
+            return Error::from(e).into();
+        };
+        NativeReturn::success()
     })
 }
 
@@ -769,19 +738,16 @@ pub unsafe extern "C" fn await_refresh(
     data: *mut LauncherData,
     raw_task: *mut TaskWrapper<Result<(AccRefreshPair, usize), Error>>,
 ) -> NativeReturn {
-    await_task(raw_task, |inner| match inner {
-        Ok((new_profile, idx)) => {
-            let data = &mut *data;
-            let state = &*state;
-            data.accounts[idx] = new_profile;
-            std::fs::write(
-                state.path.join("launcher_data.toml"),
-                toml::to_string_pretty(&data).unwrap().as_bytes(),
-            )
-            .unwrap();
-            NativeReturn::success()
-        }
-        Err(e) => e.into(),
+    await_result_task(raw_task, |(inner, idx)| {
+        let data = &mut *data;
+        let state = &*state;
+        data.accounts[idx] = inner;
+        std::fs::write(
+            state.path.join("launcher_data.toml"),
+            toml::to_string_pretty(&data).unwrap().as_bytes(),
+        )
+        .unwrap();
+        NativeReturn::success()
     })
 }
 
@@ -799,13 +765,11 @@ pub unsafe extern "C" fn remove_account(data: *mut LauncherData, index: usize) {
 
 #[no_mangle]
 /// # Safety
-pub unsafe extern "C" fn get_account_name(data: *mut LauncherData, index: usize) -> RefStringWrapper {
-    (*data).accounts[index]
-        .account
-        .profile
-        .name
-        .as_str()
-        .into()
+pub unsafe extern "C" fn get_account_name(
+    data: *mut LauncherData,
+    index: usize,
+) -> RefStringWrapper {
+    (*data).accounts[index].account.profile.name.as_str().into()
 }
 
 #[no_mangle]
@@ -828,15 +792,16 @@ pub unsafe extern "C" fn jvm_len(data: *mut LauncherData) -> usize {
 #[no_mangle]
 /// # Safety
 pub unsafe extern "C" fn jvm_name(data: *mut LauncherData, index: usize) -> RefStringWrapper {
-    (*data).jvms[index]
-        .name
-        .as_str()
-        .into()
+    (*data).jvms[index].name.as_str().into()
 }
 
 #[no_mangle]
 /// # Safety
-pub unsafe extern "C" fn add_jvm(data: *mut LauncherData, ptr: *const u16, len: usize) -> NativeReturn {
+pub unsafe extern "C" fn add_jvm(
+    data: *mut LauncherData,
+    ptr: *const u16,
+    len: usize,
+) -> NativeReturn {
     assert_eq!(ptr.align_offset(std::mem::align_of::<&[u16]>()), 0);
     let string = String::from_utf16(slice::from_raw_parts(ptr, len)).unwrap();
     match get_vendor_major_version(&string) {
@@ -967,19 +932,27 @@ fn profile_to_account(
 }
 
 #[no_mangle]
-unsafe extern "C" fn read_data(state: *const State) -> *mut TaskWrapper<Result<LauncherData, Error>> {
+unsafe extern "C" fn read_data(
+    state: *const State,
+) -> *mut TaskWrapper<Result<LauncherData, Error>> {
     let state = &*state;
     get_task(async {
         let path = state.path.join("launcher_data.toml");
         let exists = path.exists() && path.is_file();
-        let mut file = tokio::fs::OpenOptions::new().create(true).write(true).read(true).open(path).await?;
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .read(true)
+            .open(path)
+            .await?;
         if exists {
             let mut string = String::with_capacity(file.metadata().await?.len() as usize);
             file.read_to_string(&mut string).await?;
             Ok(toml::from_str(&string)?)
         } else {
             let default = LauncherData::default();
-            file.write_all(toml::to_string_pretty(&default).unwrap().as_bytes()).await?;
+            file.write_all(toml::to_string_pretty(&default).unwrap().as_bytes())
+                .await?;
             Ok(default)
         }
     })
@@ -992,18 +965,18 @@ unsafe extern "C" fn poll_data(raw_task: *mut TaskWrapper<Result<LauncherData, E
 
 /// If this is a success, we smuggle the pointer through the error
 #[no_mangle]
-unsafe extern "C" fn await_data(raw_task: *mut TaskWrapper<Result<LauncherData, Error>>) -> NativeReturn {
+unsafe extern "C" fn await_data(
+    raw_task: *mut TaskWrapper<Result<LauncherData, Error>>,
+) -> NativeReturn {
     await_task(raw_task, |inner| match inner {
-        Ok(v) => {
-            NativeReturn {
-                code: Code::Success,
-                error: OwnedStringWrapper {
-                    char_ptr: Box::into_raw(Box::new(v)) as *mut _,
-                    len: 0,
-                    capacity: 0,
-                }
-            }
-        }
-        Err(e) => e.into()
+        Ok(v) => NativeReturn {
+            code: Code::Success,
+            error: OwnedStringWrapper {
+                char_ptr: Box::into_raw(Box::new(v)) as *mut _,
+                len: 0,
+                capacity: 0,
+            },
+        },
+        Err(e) => e.into(),
     })
 }

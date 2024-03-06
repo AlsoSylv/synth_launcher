@@ -28,7 +28,13 @@ pub async fn authorization_token_response(
     device_code: &str,
     client_id: &str,
 ) -> Result<types::AuthorizationTokenResponse, crate::Error> {
-    token_response(client, device_code, client_id, "urn:ietf:params:oauth:grant-type:device_code").await
+    token_response(
+        client,
+        device_code,
+        client_id,
+        "urn:ietf:params:oauth:grant-type:device_code",
+    )
+    .await
 }
 
 pub async fn refresh_token_response(
@@ -57,7 +63,6 @@ pub async fn token_response(
         .json()
         .await?)
 }
-
 
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -131,10 +136,10 @@ pub async fn xbox_security_token_response(
         .json(&Security {
             properties: Props {
                 sandbox_id: "RETAIL",
-                user_tokens: [token]
+                user_tokens: [token],
             },
             relying_party: "rp://api.minecraftservices.com/",
-            token_type: "JWT"
+            token_type: "JWT",
         })
         .send()
         .await?

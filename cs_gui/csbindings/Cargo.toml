@@ -13,6 +13,7 @@ futures.workspace = true
 serde_json.workspace = true
 toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
+csmacros.workspace = true
 
 [lib]
 crate-type = ["cdylib"]

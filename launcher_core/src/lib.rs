@@ -111,10 +111,14 @@ impl AsyncLauncher {
 
             if meta.latest != updated.latest {
                 let description = time::format_description::well_known::Rfc3339;
-                let latest = time::PrimitiveDateTime::parse(&meta.versions[0].release_time, &description).unwrap();
+                let latest =
+                    time::PrimitiveDateTime::parse(&meta.versions[0].release_time, &description)
+                        .unwrap();
 
                 for (idx, version) in updated.versions.drain(..).enumerate() {
-                    let new_time = time::PrimitiveDateTime::parse(&version.release_time, &description).unwrap();
+                    let new_time =
+                        time::PrimitiveDateTime::parse(&version.release_time, &description)
+                            .unwrap();
                     if new_time > latest {
                         meta.versions.insert(idx, version);
                     } else {

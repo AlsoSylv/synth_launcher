@@ -16,9 +16,8 @@ namespace CsBindgen
 
 
 
-        /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "new_rust_state", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern State* new_rust_state(ushort* path, nuint len);
+        public static extern State* new_rust_state(char* Chars, nuint len);
 
         /// <summary># Safety</summary>
         [DllImport(__DllName, EntryPoint = "get_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

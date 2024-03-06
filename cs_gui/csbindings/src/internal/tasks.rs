@@ -1,10 +1,9 @@
 use crate::{runtime, NativeReturn};
 use std::future::Future;
-use std::mem::ManuallyDrop;
 use tokio::task::JoinHandle;
 
 pub struct TaskWrapper<T> {
-    pub inner: ManuallyDrop<JoinHandle<T>>,
+    pub inner: JoinHandle<T>,
 }
 
 impl<T> TaskWrapper<T> {
@@ -14,7 +13,7 @@ impl<T> TaskWrapper<T> {
         T: Send + 'static,
     {
         Self {
-            inner: ManuallyDrop::new(runtime().spawn(t)),
+            inner: runtime().spawn(t),
         }
     }
 
@@ -56,11 +55,28 @@ pub fn await_task<T, F: Fn(T) -> NativeReturn>(
     check_task_ptr(raw_task);
     let task = unsafe { Box::from_raw(raw_task) };
 
-    let inner = runtime()
-        .block_on(ManuallyDrop::into_inner(task.inner))
-        .unwrap();
+    let inner = runtime().block_on(task.inner).unwrap();
 
     f(inner)
+}
+
+pub fn await_result_task<T, E, F: Fn(T) -> NativeReturn>(
+    raw_task: *mut TaskWrapper<Result<T, E>>,
+    f: F,
+) -> NativeReturn
+where
+    E: Into<NativeReturn>,
+{
+    check_task_ptr(raw_task);
+
+    let task = unsafe { Box::from_raw(raw_task) };
+
+    let inner = runtime().block_on(task.inner).unwrap();
+
+    match inner {
+        Ok(inner) => f(inner),
+        Err(e) => e.into(),
+    }
 }
 
 pub fn cancel_task<T>(raw_task: *mut TaskWrapper<T>)

@@ -1,12 +1,12 @@
-use std::fmt::Display;
 use launcher_core::account;
+use std::fmt::Display;
 
 #[derive(Debug)]
 pub enum Error {
     Reqwest(reqwest::Error),
     Tokio(tokio::io::Error),
     SerdeJson(serde_json::Error),
-    ProfileError(account::types::ProfileError),
+    Profile(account::types::ProfileError),
     TomlDe(toml::de::Error),
 }
 
@@ -16,7 +16,7 @@ impl From<launcher_core::Error> for Error {
             launcher_core::Error::Reqwest(e) => Error::Reqwest(e),
             launcher_core::Error::Tokio(e) => Error::Tokio(e),
             launcher_core::Error::SerdeJson(e) => Error::SerdeJson(e),
-            launcher_core::Error::ProfileError(e) => Error::ProfileError(e),
+            launcher_core::Error::ProfileError(e) => Error::Profile(e),
         }
     }
 }
@@ -51,7 +51,7 @@ impl Display for Error {
             Error::Reqwest(err) => err,
             Error::Tokio(err) => err,
             Error::SerdeJson(err) => err,
-            Error::ProfileError(err) => err,
+            Error::Profile(err) => err,
             Error::TomlDe(err) => err,
         };
         write!(f, "{}", str)

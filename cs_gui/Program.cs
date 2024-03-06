@@ -285,10 +285,11 @@ public class SafeNativeMethods {
     private unsafe LauncherData* _data;
 
     public SafeNativeMethods() {
+        Console.WriteLine("H");
         var path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData).ToCharArray();
         unsafe {
             fixed (char* utf16Ptr = path) {
-                State = NativeMethods.new_rust_state((ushort*) utf16Ptr, (nuint) path.Length);
+                State = NativeMethods.new_rust_state(utf16Ptr, (nuint) path.Length);
             }
         }
     }

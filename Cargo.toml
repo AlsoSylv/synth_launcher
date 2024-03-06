@@ -4,7 +4,9 @@ members = [
     "egui_fe",
     "egui_fe/async_bridge",
     "cs_gui/csbindings",
-    "gtk_fe", "fabric_installer_rs",
+    "gtk_fe",
+    "fabric_installer_rs",
+    "cs_gui/csmacros",
 ]
 resolver = "2"
 
@@ -22,4 +24,6 @@ async-channel = "2.2.0"
 eframe = "0.26"
 launcher_core = { path = "./launcher_core" }
 async_bridge = { path = "./egui_fe/async_bridge" }
+csmacros = { path = "./cs_gui/csmacros" }
+
 
