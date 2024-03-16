@@ -6,7 +6,7 @@ members = [
     "cs_gui/csbindings",
     "gtk_fe",
     "fabric_installer_rs",
-    "cs_gui/csmacros",
+    "cs_gui/csmacros", "cs_gui/bindgen",
 ]
 resolver = "2"
 

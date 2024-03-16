@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use launcher_core::types::Version;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

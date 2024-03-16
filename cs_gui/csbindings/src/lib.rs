@@ -197,15 +197,15 @@ pub unsafe fn get_version_manifest(state: *mut State) -> *mut ManifestTaskWrappe
     }) as _
 }
 
-#[no_mangle]
+#[dotnetfunction]
 ///# Safety
 ///# The task cannot be null, and has to be a manifest task.
 ///# The type cannot be checked by the Rust or C# compiler, and must instead be checked by the programmer.
-pub extern "C" fn poll_manifest_task(raw_task: *const ManifestTaskWrapper) -> bool {
+pub fn poll_manifest_task(raw_task: *const ManifestTaskWrapper) -> bool {
     poll_task(raw_task as *const ManifestTask)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// This function consumes the task wrapper, dropping it, setting the manifest wrapper to a proper value
 /// And then return a NativeReturn, specifying if it's a success or error
 /// This is used to tell if this should be converted a C# exception
@@ -213,54 +213,54 @@ pub extern "C" fn poll_manifest_task(raw_task: *const ManifestTaskWrapper) -> bo
 /// # Safety
 /// # The task wrapper cannot be Null
 /// # The manifest wrapper cannot be null
-pub unsafe extern "C" fn await_version_manifest(
+pub unsafe fn await_version_manifest(
     state: *mut State,
     raw_task: *mut ManifestTaskWrapper,
 ) -> NativeReturn {
     await_result_task(raw_task as *mut ManifestTask, |inner| {
         let state = &*state;
         let mut lock = state.version_manifest.blocking_write();
-        *lock = Some(inner);
+        *lock = Box::leak(Box::new(Some(inner)));
         drop(lock);
         NativeReturn::success()
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 /// Task mut not be null
 /// Attempting to cancel a finished task should result in a panic
-pub extern "C" fn cancel_version_manifest(task: *mut ManifestTaskWrapper) {
+pub unsafe fn cancel_version_manifest(task: *mut ManifestTaskWrapper) {
     cancel_task(task as *mut ManifestTask)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn get_latest_release(state: *mut State) -> RefStringWrapper {
+pub unsafe fn get_latest_release(state: *mut State) -> RefStringWrapper {
     let manifest = state.as_ref().unwrap().version_manifest.blocking_read();
 
     RefStringWrapper::from(&manifest.as_ref().unwrap().latest.release)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn get_name(state: *mut State, index: usize) -> RefStringWrapper {
+pub unsafe fn get_name(state: *mut State, index: usize) -> RefStringWrapper {
     let manifest = state.as_ref().unwrap().version_manifest.blocking_read();
 
     RefStringWrapper::from(&manifest.as_ref().unwrap().versions[index].id)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn get_manifest_len(state: *mut State) -> usize {
+pub unsafe fn get_manifest_len(state: *mut State) -> usize {
     let manifest = state.as_ref().unwrap().version_manifest.blocking_read();
 
     manifest.as_ref().unwrap().versions.len()
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn is_manifest_null(state: *mut State) -> bool {
+pub unsafe fn is_manifest_null(state: *mut State) -> bool {
     state
         .as_ref()
         .unwrap()
@@ -292,6 +292,15 @@ pub unsafe extern "C" fn get_version(state: *const State, index: usize) -> *cons
         .as_ref()
         .unwrap()
         .versions[index] as *const Version as *const _
+}
+
+pub fn get_version_safe(state: &'static State, index: usize) -> &'static Version {
+    &state
+        .version_manifest
+        .blocking_read()
+        .as_ref()
+        .unwrap()
+        .versions[index]
 }
 
 #[no_mangle]

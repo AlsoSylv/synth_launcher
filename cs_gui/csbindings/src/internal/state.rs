@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tokio::sync::RwLock;
 
 pub struct State {
-    pub version_manifest: RwLock<Option<VersionManifest>>,
+    pub version_manifest: RwLock<&'static Option<VersionManifest>>,
     pub selected_version: RwLock<Option<VersionJson>>,
     pub asset_index: RwLock<Option<AssetIndexJson>>,
     pub class_path: Option<String>,
@@ -16,7 +16,7 @@ pub struct State {
 impl State {
     pub fn new(path_buf: PathBuf) -> Self {
         Self {
-            version_manifest: empty_lock(),
+            version_manifest: RwLock::new(Box::leak(Box::new(None))),
             selected_version: empty_lock(),
             asset_index: empty_lock(),
             class_path: None,
