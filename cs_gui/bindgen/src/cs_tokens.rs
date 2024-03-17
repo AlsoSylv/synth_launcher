@@ -9,6 +9,7 @@ impl Scope {
     }
 }
 
+#[derive(Default)]
 pub struct ScopeBuilder {
     imports: Vec<String>,
     name_space: Option<NameSpace>,
@@ -45,7 +46,7 @@ impl ScopeBuilder {
 impl ToString for Scope {
     fn to_string(&self) -> String {
         let imports = self.imports.iter().fold(String::new(), |acc, import| {
-            format!("{acc}using {import}\n")
+            format!("{acc}using {import};\n")
         });
 
         let name_space = format!("namespace {};\n", self.name_space.name);
@@ -58,13 +59,20 @@ impl ToString for Scope {
                 format!("{acc}\n{}", class.to_string())
             });
 
-        format!("{imports}\n{name_space}{classes}")
+        let structs = self
+            .name_space
+            .structs
+            .iter()
+            .fold(String::new(), |acc, s| format!("{acc}\n{}", s.to_string()));
+
+        format!("{imports}\n{name_space}{classes}\n{structs}")
     }
 }
 
 pub struct NameSpace {
     name: String,
     classes: Vec<Class>,
+    structs: Vec<Struct>,
 }
 
 impl NameSpace {
@@ -72,6 +80,7 @@ impl NameSpace {
         Self {
             name,
             classes: vec![],
+            structs: vec![],
         }
     }
 
@@ -81,6 +90,14 @@ impl NameSpace {
         let len = self.classes.len() - 1;
 
         &mut self.classes[len]
+    }
+
+    pub fn add_struct(&mut self, _struct: Struct) -> &mut Struct {
+        self.structs.push(_struct);
+
+        let len = self.structs.len() - 1;
+
+        &mut self.structs[len]
     }
 }
 
@@ -131,6 +148,7 @@ impl Qualifier {
 pub enum Type {
     /// Utf-16 character
     Char,
+    Boolean,
     Byte,
     Ushort,
     Uint,
@@ -143,14 +161,27 @@ pub enum Type {
     Nint,
     Void,
     String,
+    Verbatim(String),
+    FixedBuffer(Box<Type>, usize),
     Array(Box<Type>),
     Ptr(Box<Type>),
+}
+
+impl Type {
+    pub fn length(&self) -> Option<usize> {
+        if let Type::FixedBuffer(_, size) = self {
+            Some(*size)
+        } else {
+            None
+        }
+    }
 }
 
 impl ToString for Type {
     fn to_string(&self) -> String {
         match self {
             Type::Char => "char".into(),
+            Type::Boolean => "bool".into(),
             Type::Byte => todo!(),
             Type::Ushort => todo!(),
             Type::Uint => todo!(),
@@ -163,6 +194,8 @@ impl ToString for Type {
             Type::Nint => todo!(),
             Type::String => "string".into(),
             Type::Void => "void".into(),
+            Type::Verbatim(ty) => ty.to_owned(),
+            Type::FixedBuffer(ty, _) => ty.to_string(),
             Type::Array(ty) => format!("{}[]", ty.to_string()),
             Type::Ptr(ty) => format!("{}*", ty.to_string()),
         }
@@ -197,6 +230,10 @@ impl Class {
         self.constants.push(var);
     }
 
+    pub fn add_method(&mut self, method: Method) {
+        self.methods.push(method);
+    }
+
     pub fn qualifier(mut self, qualifier: Qualifier) -> Self {
         self.qualifiers.push(qualifier);
 
@@ -214,6 +251,128 @@ pub struct Method {
     body: Option<Block>,
 }
 
+pub struct Struct {
+    name: String,
+    fields: Vec<Field>,
+}
+
+impl Struct {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            fields: vec![],
+        }
+    }
+
+    pub fn field(mut self, field: Field) -> Self {
+        self.add_field(field);
+        self
+    }
+
+    pub fn add_field(&mut self, field: Field) {
+        self.fields.push(field);
+    }
+}
+
+impl ToString for Struct {
+    fn to_string(&self) -> String {
+        let fields = self.fields.iter().fold(String::new(), |acc, field| {
+            let vis = if let Some(vis) = &field.vis {
+                vis.as_str()
+            } else {
+                ""
+            };
+
+            let qualifiers = field
+                .qualifiers
+                .iter()
+                .fold(String::new(), |acc, q| format!("{acc} {}", q.as_str()));
+
+            let aft = if let Some(len) = field.ty.length() {
+                format!("[{len}]")
+            } else {
+                String::new()
+            };
+
+            format!(
+                "{acc}\n\t{vis}{qualifiers} {} {}{aft};",
+                field.ty.to_string(),
+                field.name,
+            )
+        });
+
+        format!("struct {} {{{fields}\n}}", self.name)
+    }
+}
+
+pub struct Field {
+    name: String,
+    ty: Type,
+    qualifiers: Vec<Qualifier>,
+    vis: Option<Vis>,
+}
+
+impl Field {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            ty: Type::Void,
+            qualifiers: vec![],
+            vis: None,
+        }
+    }
+
+    pub fn ty(mut self, ty: Type) -> Self {
+        self.ty = ty;
+        self
+    }
+
+    pub fn qualifier(mut self, qualifier: Qualifier) -> Self {
+        self.qualifiers.push(qualifier);
+        self
+    }
+
+    pub fn vis(mut self, vis: Vis) -> Self {
+        self.vis = Some(vis);
+        self
+    }
+}
+
+impl Method {
+    pub fn new(name: String) -> Self {
+        Self {
+            attrs: vec![],
+            args: vec![],
+            qualifiers: vec![],
+            vis: None,
+            ret: Type::Void,
+            body: None,
+            name,
+        }
+    }
+
+    pub fn attr(&mut self, attr: Attr) {
+        self.attrs.push(attr);
+    }
+
+    pub fn vis(mut self, vis: Vis) -> Self {
+        self.vis = Some(vis);
+        self
+    }
+
+    pub fn ret(&mut self, ty: Type) {
+        self.ret = ty;
+    }
+
+    pub fn qualifier(&mut self, qualifier: Qualifier) {
+        self.qualifiers.push(qualifier);
+    }
+
+    pub fn arg(&mut self, name: String, ty: Type) {
+        self.args.push((ty, name))
+    }
+}
+
 pub enum Block {
     Empty,
     Unsafe,
@@ -223,6 +382,16 @@ pub enum Block {
 pub struct Attr {
     name: String,
     args: Vec<AttrArg>,
+}
+
+impl Attr {
+    pub fn new(name: String) -> Self {
+        Self { name, args: vec![] }
+    }
+
+    pub fn arg(&mut self, arg: AttrArg) {
+        self.args.push(arg);
+    }
 }
 
 pub enum AttrArg {
@@ -330,7 +499,7 @@ impl ToString for Class {
                 .iter()
                 .fold(String::new(), |acc, s| format!("{acc} {}", s.as_str()));
 
-            let args = format!("{}", args.join(", "));
+            let args = args.join(", ");
 
             let mut attrs = Vec::new();
 
@@ -339,7 +508,7 @@ impl ToString for Class {
                     .args
                     .iter()
                     .map(|arg| match arg {
-                        AttrArg::Value(v) => format!("{v}"),
+                        AttrArg::Value(v) => v.to_string(),
                         AttrArg::ArgValue((name, value)) => format!("{name} = {value}"),
                     })
                     .collect();
@@ -352,7 +521,7 @@ impl ToString for Class {
 
             // YOU NEED TO HANDLE METHODS AND BLOCKS RECURSIVELY IN A WAY THAT LETS YOU TRACK INDENTATION PLEASE DO NOT FORGET WHAT YOU MEAN
             let method = format!(
-                "{indents}{attrs}\n{indents}{vis}{qualifiers} {ret} {name}({args}){body}\n",
+                "\n{indents}{attrs}\n{indents}{vis}{qualifiers} {ret} {name}({args}){body}",
                 attrs = attrs.join("\n"),
                 qualifiers = strings,
                 name = method.name,
@@ -377,7 +546,7 @@ impl ToString for Class {
         });
 
         let class = format!(
-            "{vis} {} class {} {{\n{}\n{}}}",
+            "{vis} {} class {} {{\n{}\n{}\n}}",
             qualifiers.join(" "),
             self.name,
             constants,

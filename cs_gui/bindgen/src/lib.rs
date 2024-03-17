@@ -1,8 +1,8 @@
 pub mod cs_tokens;
 
-use std::{fs::File, io::Write};
+use std::io::Write;
 
-use cs_tokens::{Class, NameSpace, VariableBuilder};
+use cs_tokens::{Attr, Class, Method, NameSpace, VariableBuilder};
 use syn::{
     Attribute, FnArg, Item, ItemFn, ItemStruct, Meta, Pat, QSelf, ReturnType, Signature, Type,
 };
@@ -48,57 +48,51 @@ impl Generator {
 
         let dll_const = VariableBuilder::new("__DllName".into())
             .vis(cs_tokens::Vis::Private)
-            .qualifier(cs_tokens::Qualifier::ReadOnly)
             .ty(cs_tokens::Type::String)
             .val(format!("\"{}\"", self.dll_name))
             .build();
 
         class.add_constant(dll_const);
 
-        name_space.add_class(class);
-
-        println!("{}", scope.to_string());
-
-        cs_file
-            .write_all(format!("namespace {} {{\n", self.name_space).as_bytes())
-            .unwrap();
-        cs_file
-            .write_all("\tpublic static partial class NativeMethods {\n".as_bytes())
-            .unwrap();
-        cs_file
-            .write_all(
-                format!(
-                    "\t\tprivate const string __DllName = \"{}\";\n\n",
-                    self.dll_name
-                )
-                .as_bytes(),
-            )
-            .unwrap();
         for file in &self.files {
-            parse_file(file, &mut cs_file);
+            parse_file(file, &mut class);
         }
 
-        cs_file
-            .write_all(b"\t\tpublic struct RustString { private unsafe fixed nuint repr[3]; }\n")
-            .unwrap();
-        cs_file.write(b"\t}\n").unwrap();
-        cs_file.write(b"}\n").unwrap();
+        let repr_field = cs_tokens::Field::new("repr".into())
+            .vis(cs_tokens::Vis::Private)
+            .qualifier(cs_tokens::Qualifier::Unsafe)
+            .qualifier(cs_tokens::Qualifier::Fixed)
+            .ty(cs_tokens::Type::FixedBuffer(
+                Box::new(cs_tokens::Type::Nuint),
+                3,
+            ));
+
+        let rust_string = cs_tokens::Struct::new("RustString".into()).field(repr_field);
+
+        name_space.add_struct(rust_string);
+        name_space.add_class(class);
+
+        let scope = scope.to_string();
+
+        println!("{}", scope);
+
+        cs_file.write_all(scope.as_bytes()).unwrap();
     }
 }
 
-fn parse_file(file: &'static str, cs_file: &mut File) {
+fn parse_file(file: &'static str, class: &mut Class) {
     let parsed = syn::parse_file(file).unwrap();
     for elm in parsed.items {
-        handle_elm(&elm, cs_file)
+        handle_elm(&elm, class)
     }
 }
 
-pub fn handle_elm(elm: &Item, cs_file: &mut File) {
+pub fn handle_elm(elm: &Item, class: &mut Class) {
     match elm {
         Item::Fn(ItemFn { attrs, sig, .. }) => {
             if !attrs.is_empty() {
                 for attr in attrs {
-                    handle_attrs(attr, sig, cs_file);
+                    handle_attrs(attr, sig, class);
                 }
             }
         }
@@ -112,12 +106,11 @@ pub fn handle_elm(elm: &Item, cs_file: &mut File) {
             for attr in attrs {
                 if let Meta::List(meta) = &attr.meta {
                     let last = meta.path.segments.last().unwrap();
-                    if last.ident.to_string() == "repr" {
-                        if meta.tokens.to_string() == "C" {
-                            println!("{:?}", ident)
-                        }
+                    if last.ident == "repr" && meta.tokens.to_string() == "C" {
+                        println!("{:?}", ident)
                     }
                 } else {
+                    // TODO: We should be storing a list of all supported types, and throwing an error if this isn't in the list
                 }
             }
         }
@@ -125,52 +118,142 @@ pub fn handle_elm(elm: &Item, cs_file: &mut File) {
     }
 }
 
-pub fn rs_cs_primitive(maybe_prm: &str) -> Option<&str> {
+pub fn rs_cs_primitive(maybe_prm: &str) -> Option<cs_tokens::Type> {
     match maybe_prm {
-        "bool" => "bool".into(),
-        "i8" => "sbyte".into(),
-        "i16" => "short".into(),
-        "i32" => "int".into(),
-        "i64" => "long".into(),
-        "isize" => "nint".into(),
-        "u8" => "byte".into(),
-        "u16" => "ushort".into(),
-        "u32" => "uint".into(),
-        "u64" => "ulong".into(),
-        "usize" => "nuint".into(),
+        "bool" => cs_tokens::Type::Boolean.into(),
+        "i8" => cs_tokens::Type::Sbyte.into(),
+        "i16" => cs_tokens::Type::Short.into(),
+        "i32" => cs_tokens::Type::Int.into(),
+        "i64" => cs_tokens::Type::Long.into(),
+        "isize" => cs_tokens::Type::Nint.into(),
+        "u8" => cs_tokens::Type::Byte.into(),
+        "u16" => cs_tokens::Type::Ushort.into(),
+        "u32" => cs_tokens::Type::Uint.into(),
+        "u64" => cs_tokens::Type::Ulong.into(),
+        "usize" => cs_tokens::Type::Nuint.into(),
         _ => None,
     }
 }
 
-pub fn rs_cs_supported(maybe_sup: &str, q_self: &Option<QSelf>) -> Option<Box<[&'static str]>> {
+pub fn rs_cs_supported(maybe_sup: &str, q_self: &Option<QSelf>) -> Option<Box<[cs_tokens::Type]>> {
     match maybe_sup {
-        "String" => Some(["char*", "nuint"].into()),
+        "String" => Some(
+            [
+                cs_tokens::Type::Ptr(Box::new(cs_tokens::Type::Char)),
+                cs_tokens::Type::Nuint,
+            ]
+            .into(),
+        ),
         _ => None,
     }
 }
 
-pub fn handle_attrs(attr: &Attribute, sig: &Signature, cs_file: &mut File) {
+pub fn rs_supported_return(maybe_sup: &str, q_self: &Option<QSelf>) -> Option<cs_tokens::Type> {
+    match maybe_sup {
+        "String" => cs_tokens::Type::Verbatim("RustString".into()).into(),
+        _ => None,
+    }
+}
+
+fn cs_argument(rust_arg: &FnArg, method: &mut Method, safe: &mut bool) {
+    if let FnArg::Typed(t) = rust_arg {
+        let Pat::Ident(name) = t.pat.as_ref() else {
+            unreachable!();
+        };
+
+        let name = name.ident.to_string();
+
+        match t.ty.as_ref() {
+            Type::Ptr(ptr) => {
+                *safe = false;
+                match ptr.elem.as_ref() {
+                    Type::Path(p) => {
+                        let ty = cs_tokens::Type::Ptr(
+                            cs_tokens::Type::Verbatim(
+                                p.path.segments.last().unwrap().ident.to_string(),
+                            )
+                            .into(),
+                        );
+                        method.arg(name, ty)
+                    }
+                    e => todo!("{e:?}"),
+                }
+            }
+            Type::Path(p) => {
+                let type_name = p.path.segments.last().unwrap().ident.to_string();
+                // println!("{}", type_name);
+                if let Some(prm) = rs_cs_primitive(&type_name) {
+                    method.arg(name, prm);
+                } else if let Some(maybe_sup) = rs_cs_supported(&type_name, &p.qself) {
+                    match type_name.as_str() {
+                        "String" => {
+                            let mut maybe_sup = maybe_sup.into_vec();
+                            method.arg(format!("{name}_ptr"), maybe_sup.remove(0));
+                            method.arg(format!("{name}_len"), maybe_sup.remove(0));
+                        }
+                        _ => unimplemented!("{type_name}"),
+                    }
+                } else {
+                    unimplemented!("We should handle repr(C) types here")
+                }
+            }
+            _ => todo!(),
+        }
+    } else {
+        unimplemented!("Methods are unsupported")
+    }
+}
+
+pub fn handle_attrs(attr: &Attribute, sig: &Signature, class: &mut Class) {
     match &attr.meta {
         Meta::Path(p) => {
-            if p.segments[0].ident.to_string() == "dotnetfunction" {
-                let mut cs_args = Vec::new();
-                let cs_type = |ty: &Type| {
+            if p.segments[0].ident == "dotnetfunction" {
+                let function_name = sig.ident.to_string();
+
+                let mut linkname_attr = Attr::new("DllImport".into());
+                linkname_attr.arg(cs_tokens::AttrArg::Value("__DllName".into()));
+                linkname_attr.arg(cs_tokens::AttrArg::ArgValue((
+                    "EntryPoint".into(),
+                    format!("\"{function_name}\""),
+                )));
+                linkname_attr.arg(cs_tokens::AttrArg::ArgValue((
+                    "CallingConvention".into(),
+                    "CallingConvention.Cdecl".into(),
+                )));
+                linkname_attr.arg(cs_tokens::AttrArg::ArgValue((
+                    "ExactSpelling".into(),
+                    "true".into(),
+                )));
+                let mut method = Method::new(function_name).vis(cs_tokens::Vis::Public);
+                method.attr(linkname_attr);
+                method.qualifier(cs_tokens::Qualifier::Static);
+                method.qualifier(cs_tokens::Qualifier::Extern);
+
+                let mut safe = true;
+                let mut safe_args = true;
+
+                let mut cs_type = |ty: &Type| {
                     match ty {
-                        Type::Ptr(ptr) => match ptr.elem.as_ref() {
-                            Type::Path(p) => {
-                                format!("{}*", p.path.segments.last().unwrap().ident.to_string())
+                        Type::Ptr(ptr) => {
+                            safe = false;
+                            match ptr.elem.as_ref() {
+                                Type::Path(p) => {
+                                    let ty = p.path.segments.last().unwrap().ident.to_string();
+                                    cs_tokens::Type::Ptr(Box::new(cs_tokens::Type::Verbatim(ty)))
+                                }
+                                e => todo!("{e:?}"),
                             }
-                            e => todo!("{e:?}"),
-                        },
+                        }
                         Type::Path(p) => {
                             let type_name = p.path.segments.last().unwrap().ident.to_string();
                             // println!("{}", type_name);
                             if let Some(prm) = rs_cs_primitive(&type_name) {
-                                prm.to_string()
+                                prm
+                            } else if let Some(ty) = rs_supported_return(&type_name, &p.qself) {
+                                ty
                             } else {
-                                if let Some(maybe_sup) = rs_cs_supported(&type_name, &p.qself) {}
-
-                                "RustString".into()
+                                // TODO: Check that this type is repr(C)
+                                cs_tokens::Type::Verbatim(type_name)
                             }
                         }
                         _ => todo!(),
@@ -188,32 +271,52 @@ pub fn handle_attrs(attr: &Attribute, sig: &Signature, cs_file: &mut File) {
                             let name = name.ident.to_string();
 
                             match t.ty.as_ref() {
-                                Type::Ptr(ptr) => match ptr.elem.as_ref() {
-                                    Type::Path(p) => format!(
-                                        "{}* {name}",
-                                        p.path.segments.last().unwrap().ident.to_string()
-                                    ),
-                                    e => todo!("{e:?}"),
-                                },
+                                Type::Ptr(ptr) => {
+                                    safe_args = false;
+                                    match ptr.elem.as_ref() {
+                                        Type::Path(p) => {
+                                            let ty = cs_tokens::Type::Ptr(
+                                                cs_tokens::Type::Verbatim(
+                                                    p.path
+                                                        .segments
+                                                        .last()
+                                                        .unwrap()
+                                                        .ident
+                                                        .to_string(),
+                                                )
+                                                .into(),
+                                            );
+                                            method.arg(name, ty)
+                                        }
+                                        e => todo!("{e:?}"),
+                                    }
+                                }
                                 Type::Path(p) => {
                                     let type_name =
                                         p.path.segments.last().unwrap().ident.to_string();
                                     // println!("{}", type_name);
                                     if let Some(prm) = rs_cs_primitive(&type_name) {
-                                        prm.to_string()
+                                        method.arg(name, prm);
                                     } else if let Some(maybe_sup) =
                                         rs_cs_supported(&type_name, &p.qself)
                                     {
                                         match type_name.as_str() {
                                             "String" => {
-                                                let first = format!("{} {name}_ptr", maybe_sup[0]);
-                                                let second = format!("{} {name}_len", maybe_sup[1]);
-                                                format!("{first}, {second}")
+                                                let mut maybe_sup = maybe_sup.into_vec();
+                                                method.arg(
+                                                    format!("{name}_ptr"),
+                                                    maybe_sup.remove(0),
+                                                );
+                                                method.arg(
+                                                    format!("{name}_len"),
+                                                    maybe_sup.remove(0),
+                                                );
                                             }
                                             _ => unimplemented!("{type_name}"),
                                         }
                                     } else {
-                                        todo!()
+                                        // TODO: Check that this type is repr(C)
+                                        method.arg(name, cs_tokens::Type::Verbatim(type_name));
                                     }
                                 }
                                 _ => todo!(),
@@ -222,31 +325,20 @@ pub fn handle_attrs(attr: &Attribute, sig: &Signature, cs_file: &mut File) {
                     }
                 };
 
-                sig.inputs
-                    .iter()
-                    .for_each(|input| cs_args.push(cs_arg(&input)));
+                sig.inputs.iter().for_each(cs_arg);
 
-                let cs_return_type = |ret: &ReturnType| match ret {
-                    ReturnType::Default => "void".into(),
+                let mut cs_return_type = |ret: &ReturnType| match ret {
+                    ReturnType::Default => cs_tokens::Type::Void,
                     ReturnType::Type(_, ty) => cs_type(ty),
                 };
 
-                let args_str = cs_args.join(", ");
+                method.ret(cs_return_type(&sig.output));
 
-                cs_file.write_all(format!("\t\t[DllImport(__DllName, EntryPoint = \"{}\", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]\n", sig.ident.to_string()).as_bytes()).unwrap();
-                cs_file
-                    .write_all(
-                        format!(
-                            "\t\tpublic static extern unsafe {} {}({});\n\n",
-                            cs_return_type(&sig.output),
-                            sig.ident.to_string(),
-                            args_str
-                        )
-                        .as_bytes(),
-                    )
-                    .unwrap();
-                // println!("{:?}", sig.inputs);
-                // println!("{:?}", sig.output);
+                if !safe || !safe_args {
+                    method.qualifier(cs_tokens::Qualifier::Unsafe);
+                }
+
+                class.add_method(method);
             }
         }
         _ => {}

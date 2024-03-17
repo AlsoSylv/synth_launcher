@@ -269,10 +269,10 @@ pub unsafe fn is_manifest_null(state: *mut State) -> bool {
         .is_none()
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 /// # The owned string wrapper cannot have been mutated outside the rust code
-pub unsafe extern "C" fn free_owned_string_wrapper(string_wrapper: OwnedStringWrapper) {
+pub unsafe fn free_owned_string_wrapper(string_wrapper: OwnedStringWrapper) {
     drop(String::from_raw_parts(
         string_wrapper.char_ptr,
         string_wrapper.len,
@@ -700,7 +700,7 @@ pub unsafe extern "C" fn await_auth_loop(
 
         data.accounts.push(inner);
         if let Err(e) = std::fs::write(
-            (&*state).path.join("launcher_data.toml"),
+            (*state).path.join("launcher_data.toml"),
             toml::to_string_pretty(&data).unwrap().as_bytes(),
         ) {
             return Error::from(e).into();

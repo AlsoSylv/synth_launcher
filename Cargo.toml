@@ -6,7 +6,8 @@ members = [
     "cs_gui/csbindings",
     "gtk_fe",
     "fabric_installer_rs",
-    "cs_gui/csmacros", "cs_gui/bindgen",
+    "cs_gui/csmacros", 
+    "cs_gui/bindgen",
 ]
 resolver = "2"
 
@@ -25,5 +26,6 @@ eframe = "0.26"
 launcher_core = { path = "./launcher_core" }
 async_bridge = { path = "./egui_fe/async_bridge" }
 csmacros = { path = "./cs_gui/csmacros" }
+ahash = "0.8"
 
 
