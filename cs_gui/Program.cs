@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using CsBindgen;
+using csbindings;
 
 namespace cs_gui;
 
@@ -59,7 +59,7 @@ public class AssetTask {
 
                     var v = NativeMethods.await_assets(assetTask);
                 
-                    if (v.code != Code.Success) throw new RustException(v);
+                    if (v.code != csbindings.Code.Success) throw new RustException(v);
                 }
             }
         });
@@ -80,7 +80,7 @@ public class AssetTask {
 
                     var v = NativeMethods.await_assets(assetTask);
                 
-                    if (v.code != Code.Success) throw new RustException(v);
+                    if (v.code != csbindings.Code.Success) throw new RustException(v);
                 }
             }
         }, token);
@@ -110,7 +110,7 @@ public class LibrariesTask {
 
                 var v = NativeMethods.await_libraries(_state, assetTask);
                 
-                if (v.code != Code.Success) throw new RustException(v);
+                if (v.code != csbindings.Code.Success) throw new RustException(v);
             }
         }
     }
@@ -133,7 +133,7 @@ public class LibrariesTask {
 
                 var v = NativeMethods.await_libraries(_state, assetTask);
                 
-                if (v.code != Code.Success) throw new RustException(v);
+                if (v.code != csbindings.Code.Success) throw new RustException(v);
             }
         }
     }
@@ -162,7 +162,7 @@ public class JarTask {
 
                 var v = NativeMethods.await_jar(_state, assetTask);
                 
-                if (v.code != Code.Success) throw new RustException(v);
+                if (v.code != csbindings.Code.Success) throw new RustException(v);
             }
         }
     }
@@ -185,7 +185,7 @@ public class JarTask {
 
                 var v = NativeMethods.await_jar(_state, assetTask);
                 
-                if (v.code != Code.Success) throw new RustException(v);
+                if (v.code != csbindings.Code.Success) throw new RustException(v);
             }
         }
     }
@@ -227,7 +227,7 @@ public class VersionWrapper: INotifyPropertyChanged
                 }
 
                 var value = NativeMethods.await_version_task(_state, versionTaskPointer);
-                if (value.code != Code.Success) throw new RustException(value);
+                if (value.code != csbindings.Code.Success) throw new RustException(value);
 
                 if (token.IsCancellationRequested) return;
 
@@ -239,7 +239,7 @@ public class VersionWrapper: INotifyPropertyChanged
                 }
 
                 var v = NativeMethods.await_asset_index(_state, assetIndexTaskPointer);
-                if (v.code != Code.Success) throw new RustException(v);
+                if (v.code != csbindings.Code.Success) throw new RustException(v);
             }
         }, token);
 
@@ -254,7 +254,7 @@ public class VersionWrapper: INotifyPropertyChanged
         }
     }
 
-    public ReleaseType Type
+    public csbindings.ReleaseType Type
     {
         get
         {
@@ -285,7 +285,6 @@ public class SafeNativeMethods {
     private unsafe LauncherData* _data;
 
     public SafeNativeMethods() {
-        Console.WriteLine("H");
         var path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData).ToCharArray();
         unsafe {
             fixed (char* utf16Ptr = path) {
@@ -299,12 +298,13 @@ public class SafeNativeMethods {
             var taskPtr = NativeMethods.read_data(State);
             while (!NativeMethods.poll_data(taskPtr)) { }
 
-            var v = NativeMethods.await_data(taskPtr);
+            var ptr = NativeMethods.alloc_data();
+            var v = NativeMethods.await_data(taskPtr, ptr);
             if (v.code != Code.Success) {
                 throw new RustException(v);
             }
 
-            _data = (LauncherData*)v.error.char_ptr;
+            _data = ptr;
         }
     });
     
@@ -379,7 +379,7 @@ public class SafeNativeMethods {
 
                 var value = NativeMethods.await_auth_loop(State, _data, taskPointer);
 
-                if (value.code != Code.Success) {
+                if (value.code != csbindings.Code.Success) {
                     throw new RustException(value);
                 }
             }
@@ -391,7 +391,7 @@ public class SafeNativeMethods {
             while (!NativeMethods.poll_device_response(responseTask)) { }
 
             var response = NativeMethods.await_device_response(State, responseTask);
-            if (response.code != Code.Success) throw new RustException(response);
+            if (response.code != csbindings.Code.Success) throw new RustException(response);
         }
     });
 
@@ -432,7 +432,7 @@ public class SafeNativeMethods {
 
             var v = NativeMethods.await_refresh(State, _data, task);
 
-            if (v.code != Code.Success) throw new RustException(v);
+            if (v.code != csbindings.Code.Success) throw new RustException(v);
         }
     });
 
@@ -489,4 +489,4 @@ public class SafeNativeMethods {
 }
 
 internal class RustException(NativeReturn value)
-    : Exception(value.code + " " + Program.CopyAndFreeOwnedString(value.error));
+    : Exception(value.code + " " + "todo");

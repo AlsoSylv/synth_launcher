@@ -1,36 +1,222 @@
 using System.Runtime.InteropServices;
 
-namespace csbindings {
-	public static partial class NativeMethods {
-		private const string __DllName = "csbindings";
+namespace csbindings;
 
-		[DllImport(__DllName, EntryPoint = "new_rust_state", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-		public static extern unsafe State* new_rust_state(char* raw_path_ptr, nuint raw_path_len);
+public static partial class NativeMethods {
+	private const string __DllName = "csbindings";
 
-		[DllImport(__DllName, EntryPoint = "get_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-		public static extern unsafe ManifestTaskWrapper* get_version_manifest(State* state);
+	[DllImport(__DllName, EntryPoint = "new_rust_state", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe State* new_rust_state(char* raw_path_ptr, nuint raw_path_len);
 
-		[DllImport(__DllName, EntryPoint = "poll_manifest_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-		public static extern unsafe bool poll_manifest_task(ManifestTaskWrapper* raw_task);
+	[DllImport(__DllName, EntryPoint = "get_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe ManifestTaskWrapper* get_version_manifest(State* state);
 
-		[DllImport(__DllName, EntryPoint = "await_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-		public static extern unsafe RustString await_version_manifest(State* state, ManifestTaskWrapper* raw_task);
+	[DllImport(__DllName, EntryPoint = "poll_manifest_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool poll_manifest_task(ManifestTaskWrapper* raw_task);
 
-		[DllImport(__DllName, EntryPoint = "cancel_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-		public static extern unsafe void cancel_version_manifest(ManifestTaskWrapper* task);
+	[DllImport(__DllName, EntryPoint = "await_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn await_version_manifest(State* state, ManifestTaskWrapper* raw_task);
 
-		[DllImport(__DllName, EntryPoint = "get_latest_release", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-		public static extern unsafe RustString get_latest_release(State* state);
+	[DllImport(__DllName, EntryPoint = "cancel_version_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void cancel_version_manifest(ManifestTaskWrapper* task);
 
-		[DllImport(__DllName, EntryPoint = "get_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-		public static extern unsafe RustString get_name(State* state, nuint);
+	[DllImport(__DllName, EntryPoint = "get_latest_release", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe RefStringWrapper get_latest_release(State* state);
 
-		[DllImport(__DllName, EntryPoint = "get_manifest_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-		public static extern unsafe nuint get_manifest_len(State* state);
+	[DllImport(__DllName, EntryPoint = "get_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe RefStringWrapper get_name(State* state, nuint index);
 
-		[DllImport(__DllName, EntryPoint = "is_manifest_null", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-		public static extern unsafe bool is_manifest_null(State* state);
+	[DllImport(__DllName, EntryPoint = "get_manifest_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe nuint get_manifest_len(State* state);
 
-		public struct RustString { private unsafe fixed nuint repr[3]; }
-	}
+	[DllImport(__DllName, EntryPoint = "is_manifest_null", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool is_manifest_null(State* state);
+
+	[DllImport(__DllName, EntryPoint = "free_owned_string_wrapper", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern void free_owned_string_wrapper(OwnedStringWrapper string_wrapper);
+
+	[DllImport(__DllName, EntryPoint = "get_version", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe VersionErased* get_version(State* state, nuint index);
+
+	[DllImport(__DllName, EntryPoint = "version_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe RefStringWrapper version_name(VersionErased* version);
+
+	[DllImport(__DllName, EntryPoint = "version_type", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe ReleaseType version_type(VersionErased* version);
+
+	[DllImport(__DllName, EntryPoint = "get_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe TaskWrapper* get_version_task(State* state, VersionErased* version);
+
+	[DllImport(__DllName, EntryPoint = "poll_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool poll_version_task(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "await_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn await_version_task(State* state, TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "cancel_version_task", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void cancel_version_task(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "get_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe TaskWrapper* get_asset_index(State* state);
+
+	[DllImport(__DllName, EntryPoint = "poll_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool poll_asset_index(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "await_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn await_asset_index(State* state, TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "cancel_asset_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void cancel_asset_index(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "get_libraries", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe TaskWrapper* get_libraries(State* state, ulong* total, ulong* finished);
+
+	[DllImport(__DllName, EntryPoint = "poll_libraries", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool poll_libraries(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "await_libraries", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn await_libraries(State* state, TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "cancel_libraries", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void cancel_libraries(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "get_assets", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe TaskWrapper* get_assets(State* state, ulong* total, ulong* finished);
+
+	[DllImport(__DllName, EntryPoint = "poll_assets", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool poll_assets(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "await_assets", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn await_assets(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "cancel_assets", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void cancel_assets(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "get_jar", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe TaskWrapper* get_jar(State* state, ulong* total, ulong* finished);
+
+	[DllImport(__DllName, EntryPoint = "poll_jar", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool poll_jar(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "await_jar", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn await_jar(State* state, TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "cancel_jar", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void cancel_jar(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "play", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void play(State* state, LauncherData* data, nuint jvm_index, nuint acc_index);
+
+	[DllImport(__DllName, EntryPoint = "play_default_jvm", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void play_default_jvm(State* state, LauncherData* data, nuint acc_index);
+
+	[DllImport(__DllName, EntryPoint = "get_device_response", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe TaskWrapper* get_device_response();
+
+	[DllImport(__DllName, EntryPoint = "poll_device_response", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool poll_device_response(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "await_device_response", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn await_device_response(State* state, TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "get_user_code", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe RefStringWrapper get_user_code(State* state);
+
+	[DllImport(__DllName, EntryPoint = "get_url", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe RefStringWrapper get_url(State* state);
+
+	[DllImport(__DllName, EntryPoint = "start_auth_loop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe TaskWrapper* start_auth_loop(State* state);
+
+	[DllImport(__DllName, EntryPoint = "poll_auth_loop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool poll_auth_loop(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "await_auth_loop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn await_auth_loop(State* state, LauncherData* data, TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "cancel_auth_loop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void cancel_auth_loop(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "try_refresh", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe TaskWrapper* try_refresh(LauncherData* data, nuint index);
+
+	[DllImport(__DllName, EntryPoint = "poll_refresh", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool poll_refresh(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "await_refresh", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn await_refresh(State* state, LauncherData* data, TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "accounts_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe nuint accounts_len(LauncherData* data);
+
+	[DllImport(__DllName, EntryPoint = "remove_account", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void remove_account(LauncherData* data, nuint index);
+
+	[DllImport(__DllName, EntryPoint = "get_account_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe RefStringWrapper get_account_name(LauncherData* data, nuint index);
+
+	[DllImport(__DllName, EntryPoint = "needs_refresh", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool needs_refresh(LauncherData* data, nuint index);
+
+	[DllImport(__DllName, EntryPoint = "jvm_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe nuint jvm_len(LauncherData* data);
+
+	[DllImport(__DllName, EntryPoint = "jvm_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe RefStringWrapper jvm_name(LauncherData* data, nuint index);
+
+	[DllImport(__DllName, EntryPoint = "add_jvm", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn add_jvm(LauncherData* data, ushort* ptr, nuint len);
+
+	[DllImport(__DllName, EntryPoint = "remove_jvm", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe void remove_jvm(LauncherData* data, nuint index);
+
+	[DllImport(__DllName, EntryPoint = "read_data", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe TaskWrapper* read_data(State* state);
+
+	[DllImport(__DllName, EntryPoint = "alloc_data", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe LauncherData* alloc_data();
+
+	[DllImport(__DllName, EntryPoint = "poll_data", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe bool poll_data(TaskWrapper* raw_task);
+
+	[DllImport(__DllName, EntryPoint = "await_data", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+	public static extern unsafe NativeReturn await_data(TaskWrapper* raw_task, LauncherData* data);
+}
+
+public struct LauncherData {
+}
+
+public struct AccRefreshPair {
+}
+
+public struct ManifestTaskWrapper {
+}
+
+public struct NativeReturn {
+	public Code code;
+	public string error;
+}
+
+public struct VersionErased {
+}
+
+public struct RefStringWrapper {
+	public unsafe byte* char_ptr;
+	public nuint len;
+}
+
+public struct OwnedStringWrapper {
+	public unsafe byte* char_ptr;
+	public nuint len;
+	public nuint capacity;
+}
+
+public struct State {
+}
+
+public struct TaskWrapper {
+}
+
+public struct RustString {
+	private unsafe fixed nuint repr[3];
 }

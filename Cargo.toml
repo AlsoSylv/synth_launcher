@@ -25,6 +25,7 @@ async-channel = "2.2.0"
 eframe = "0.26"
 launcher_core = { path = "./launcher_core" }
 async_bridge = { path = "./egui_fe/async_bridge" }
+csbindings = { path = "./cs_gui/csbindings" }
 csmacros = { path = "./cs_gui/csmacros" }
 ahash = "0.8"
 

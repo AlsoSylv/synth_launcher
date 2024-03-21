@@ -1,11 +1,23 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use std::str::FromStr;
 use syn::punctuated::Punctuated;
-use syn::token::Comma;
+use syn::token::{Colon, Comma, Mut, Star};
 use syn::{
-    parse_macro_input, Expr, FnArg, ItemFn, Local, LocalInit, Pat, PatType, Stmt, Type, TypePtr,
+    parse_macro_input, Expr, FnArg, Ident, Item, ItemFn, ItemStruct, Local, LocalInit, Pat,
+    PatIdent, PatType, ReturnType, Stmt, Type, TypePtr,
 };
+
+#[proc_macro_attribute]
+pub fn dotnetstruct(
+    _: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let struc = parse_macro_input!(item as ItemStruct);
+    let fields = &struc.fields;
+
+    quote!(#struc).into()
+}
 
 #[proc_macro_attribute]
 pub fn dotnetfunction(
@@ -36,6 +48,8 @@ pub fn dotnetfunction(
 
     let expanded = quote! {
         #[no_mangle]
+        #[allow(improper_ctypes)]
+        #[allow(improper_ctypes_definitions)]
         #(#attrs)*
         #vis #safety extern "C" fn #name(#new_inputs) #output {
             #(#strings)*
@@ -44,6 +58,107 @@ pub fn dotnetfunction(
     };
 
     proc_macro::TokenStream::from(expanded)
+}
+
+#[proc_macro_attribute]
+pub fn dotnet(
+    _args: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let item = syn::parse_macro_input!(item as Item);
+    match item {
+        Item::Enum(_en) => {
+            todo!()
+        }
+        Item::Struct(_struc) => {
+            todo!()
+        }
+        Item::Fn(func) => {
+            let sig = &func.sig;
+            let mut new_args: Punctuated<FnArg, Comma> = Punctuated::new();
+            let args = arguments(&sig.inputs, &mut new_args);
+            let rust_func = &sig.ident;
+            let raw_c_func = quote::format_ident!("raw_{}", rust_func);
+            let output_binding = match &sig.output {
+                ReturnType::Type(_, ty) => {
+                    new_args.push(FnArg::Typed(PatType {
+                        attrs: vec![],
+                        colon_token: Colon(Span::call_site()),
+                        pat: Box::new(Pat::Ident(PatIdent {
+                            attrs: vec![],
+                            ident: Ident::new("_return", Span::call_site()),
+                            subpat: None,
+                            by_ref: None,
+                            mutability: None,
+                        })),
+                        ty: Box::new(Type::Ptr(TypePtr {
+                            const_token: None,
+                            elem: ty.to_owned(),
+                            star_token: Star(Span::call_site()),
+                            mutability: Some(Mut(Span::call_site())),
+                        })),
+                    }));
+                    quote! { *_return =  }
+                }
+                ReturnType::Default => {
+                    quote! {}
+                }
+            };
+            // TODO: Transform args
+            // TODO: seperate out common logic
+            // TODO: Determine if type is FFI safe, and then do things correctly
+            let output = quote! {
+                #[no_mangle]
+                pub unsafe extern fn #raw_c_func(#new_args) {
+                    let raw_path = std::mem::take((*raw_path).as_mut_string());
+                    #output_binding #rust_func(#args);
+                }
+
+                #func
+            };
+            output.into()
+        }
+        _ => unimplemented!(),
+    }
+}
+
+fn arguments<'a>(
+    inputs: &'a Punctuated<FnArg, Comma>,
+    new_inputs: &mut Punctuated<FnArg, Comma>,
+) -> Punctuated<&'a proc_macro2::Ident, Comma> {
+    let mut args = Punctuated::new();
+    for input in inputs {
+        let FnArg::Typed(input) = &input else {
+            unimplemented!("Methods are not supported!")
+        };
+        let Pat::Ident(w) = input.pat.as_ref() else {
+            unreachable!()
+        };
+
+        let mut new_input = input.clone();
+
+        match new_input.ty.as_ref() {
+            Type::Path(ty) => {
+                let last = ty.path.segments.last().unwrap();
+                if last.ident.to_string() == "String" {
+                    *new_input.ty.as_mut() = Type::Ptr(TypePtr {
+                        star_token: Star(Span::call_site()),
+                        const_token: None,
+                        mutability: Some(Mut(Span::call_site())),
+                        elem: Box::new(Type::Verbatim(
+                            TokenStream::from_str("RustString").unwrap(),
+                        )),
+                    })
+                }
+            }
+            _ => {}
+        }
+
+        new_inputs.push(FnArg::Typed(new_input));
+
+        args.push(&w.ident);
+    }
+    args
 }
 
 fn handle_input_types(t: &PatType, inputs: &mut Punctuated<FnArg, Comma>) -> Option<Stmt> {

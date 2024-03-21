@@ -1,6 +1,6 @@
 use internal::*;
 mod internal;
-use csmacros::dotnetfunction;
+use csmacros::{dotnet, dotnetfunction};
 use error::Error;
 use instances::{Instance, Jvm};
 use launcher_core::account::auth::{
@@ -16,6 +16,7 @@ use launcher_core::{account, AsyncLauncher};
 use serde::{Deserialize, Serialize};
 use state::State;
 use std::fmt::Display;
+use std::mem::transmute;
 use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::slice;
@@ -65,14 +66,14 @@ pub type ManifestTask = TaskWrapper<Result<VersionManifest, Error>>;
 #[repr(C)]
 pub struct NativeReturn {
     code: Code,
-    error: OwnedStringWrapper,
+    error: String,
 }
 
 impl NativeReturn {
     fn success() -> Self {
         Self {
             code: Code::Success,
-            error: OwnedStringWrapper::empty(),
+            error: String::new(),
         }
     }
 }
@@ -100,7 +101,7 @@ impl From<Error> for NativeReturn {
 
         Self {
             code,
-            error: e.to_string().into(),
+            error: e.to_string(),
         }
     }
 }
@@ -161,26 +162,6 @@ impl From<String> for OwnedStringWrapper {
             capacity: value.capacity(),
             char_ptr: value.leak().as_mut_ptr(),
         }
-    }
-}
-
-impl OwnedStringWrapper {
-    fn empty() -> Self {
-        OwnedStringWrapper {
-            char_ptr: null_mut(),
-            len: 0,
-            capacity: 0,
-        }
-    }
-}
-
-#[dotnetfunction]
-pub unsafe fn new_rust_state(raw_path: String) -> *mut State {
-    if let Ok(path) = raw_path {
-        let path = PathBuf::from(path).join("synth_launcher");
-        Box::leak(Box::new(State::new(path)))
-    } else {
-        null_mut()
     }
 }
 
@@ -253,9 +234,10 @@ pub unsafe fn get_name(state: *mut State, index: usize) -> RefStringWrapper {
 #[dotnetfunction]
 /// # Safety
 pub unsafe fn get_manifest_len(state: *mut State) -> usize {
-    let manifest = state.as_ref().unwrap().version_manifest.blocking_read();
+    let manifest = &state.as_ref().unwrap().version_manifest.blocking_read();
 
-    manifest.as_ref().unwrap().versions.len()
+    let len = manifest.as_ref().unwrap().versions.len();
+    len
 }
 
 #[dotnetfunction]
@@ -280,7 +262,7 @@ pub unsafe fn free_owned_string_wrapper(string_wrapper: OwnedStringWrapper) {
     ))
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 /// # State cannot be null, index cannot be greater than mainfest len
 /// # The lifetime of this pointer is the same as the version manifest
@@ -303,15 +285,15 @@ pub fn get_version_safe(state: &'static State, index: usize) -> &'static Version
         .versions[index]
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 /// # version cannot be null and must point to a valid version
-pub unsafe extern "C" fn version_name(version: *const VersionErased) -> RefStringWrapper {
+pub unsafe fn version_name(version: *const VersionErased) -> RefStringWrapper {
     let version = &*(version as *const Version);
     version.id.as_str().into()
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 /// # version cannot be null and must point to a valid version
 pub unsafe extern "C" fn version_type(version: *const VersionErased) -> ReleaseType {
@@ -319,7 +301,7 @@ pub unsafe extern "C" fn version_type(version: *const VersionErased) -> ReleaseT
     version.version_type.into()
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn get_version_task(
     state: *mut State,
@@ -334,7 +316,7 @@ pub unsafe extern "C" fn get_version_task(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 ///# Safety
 ///# The task cannot be null, and has to be a version task.
 ///# The type cannot be checked by the Rust or C# compiler, and must instead be checked by the programmer.
@@ -344,9 +326,9 @@ pub unsafe extern "C" fn poll_version_task(
     poll_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn await_version_task(
+pub unsafe fn await_version_task(
     state: *mut State,
     raw_task: *mut TaskWrapper<Result<VersionJson, Error>>,
 ) -> NativeReturn {
@@ -359,7 +341,7 @@ pub unsafe extern "C" fn await_version_task(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 /// This will drop a version task regardless of completion, this is only used when cancelling
 pub unsafe extern "C" fn cancel_version_task(
@@ -368,7 +350,7 @@ pub unsafe extern "C" fn cancel_version_task(
     cancel_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn get_asset_index(
     state: *mut State,
@@ -385,7 +367,7 @@ pub unsafe extern "C" fn get_asset_index(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub extern "C" fn poll_asset_index(
     raw_task: *const TaskWrapper<Result<AssetIndexJson, Error>>,
@@ -393,7 +375,7 @@ pub extern "C" fn poll_asset_index(
     poll_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn await_asset_index(
     state: *mut State,
@@ -408,7 +390,7 @@ pub unsafe extern "C" fn await_asset_index(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn cancel_asset_index(
     raw_task: *mut TaskWrapper<Result<AssetIndexJson, Error>>,
@@ -416,7 +398,7 @@ pub unsafe extern "C" fn cancel_asset_index(
     cancel_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 /// Total and Finished will be treated like atomics
 pub unsafe extern "C" fn get_libraries(
@@ -442,14 +424,14 @@ pub unsafe extern "C" fn get_libraries(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 pub extern "C" fn poll_libraries(raw_task: *const TaskWrapper<Result<String, Error>>) -> bool {
     poll_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn await_libraries(
+pub unsafe fn await_libraries(
     state: *mut State,
     raw_task: *mut TaskWrapper<Result<String, Error>>,
 ) -> NativeReturn {
@@ -460,12 +442,12 @@ pub unsafe extern "C" fn await_libraries(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 pub extern "C" fn cancel_libraries(raw_task: *mut TaskWrapper<Result<(), Error>>) {
     cancel_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 /// # Total and Finished will be treated like atomics
 pub unsafe extern "C" fn get_assets(
@@ -490,22 +472,22 @@ pub unsafe extern "C" fn get_assets(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 pub extern "C" fn poll_assets(raw_task: *const TaskWrapper<Result<(), Error>>) -> bool {
     poll_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 pub extern "C" fn await_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) -> NativeReturn {
     await_result_task(raw_task, |_| NativeReturn::success())
 }
 
-#[no_mangle]
+#[dotnetfunction]
 pub extern "C" fn cancel_assets(raw_task: *mut TaskWrapper<Result<(), Error>>) {
     cancel_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn get_jar(
     state: *mut State,
@@ -524,29 +506,29 @@ pub unsafe extern "C" fn get_jar(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 pub extern "C" fn poll_jar(raw_task: *mut TaskWrapper<Result<String, Error>>) -> bool {
     poll_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn await_jar(
+pub unsafe fn await_jar(
     state: *mut State,
     raw_task: *mut TaskWrapper<Result<String, Error>>,
 ) -> NativeReturn {
     await_result_task(raw_task, |inner| {
-        (*state).jar_path = Some(inner);
+        (&mut *state).jar_path = Some(inner);
         NativeReturn::success()
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 pub extern "C" fn cancel_jar(raw_task: *mut TaskWrapper<Result<String, Error>>) {
     cancel_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 pub unsafe extern "C" fn play(
     state: *const State,
     data: *const LauncherData,
@@ -576,7 +558,7 @@ pub unsafe extern "C" fn play(
     );
 }
 
-#[no_mangle]
+#[dotnetfunction]
 pub unsafe extern "C" fn play_default_jvm(
     state: *const State,
     data: *const LauncherData,
@@ -606,12 +588,12 @@ pub unsafe extern "C" fn play_default_jvm(
 
 pub const CLIENT_ID: &str = "04bc8538-fc3c-4490-9e61-a2b3f4cbcf5c";
 
-#[no_mangle]
+#[dotnetfunction]
 pub extern "C" fn get_device_response() -> *mut TaskWrapper<Result<DeviceCodeResponse, Error>> {
     get_task(async { Ok(account::auth::device_response(client(), CLIENT_ID).await?) })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn poll_device_response(
     raw_task: *const TaskWrapper<Result<DeviceCodeResponse, Error>>,
@@ -619,9 +601,9 @@ pub unsafe extern "C" fn poll_device_response(
     poll_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn await_device_response(
+pub unsafe fn await_device_response(
     state: *mut State,
     raw_task: *mut TaskWrapper<Result<DeviceCodeResponse, Error>>,
 ) -> NativeReturn {
@@ -633,9 +615,9 @@ pub unsafe extern "C" fn await_device_response(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn get_user_code(state: *mut State) -> RefStringWrapper {
+pub unsafe fn get_user_code(state: *mut State) -> RefStringWrapper {
     let state = &*state;
     if let Some(code) = &state.device_code {
         code.user_code.as_str().into()
@@ -644,9 +626,9 @@ pub unsafe extern "C" fn get_user_code(state: *mut State) -> RefStringWrapper {
     }
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn get_url(state: *mut State) -> RefStringWrapper {
+pub unsafe fn get_url(state: *mut State) -> RefStringWrapper {
     let state = &*state;
     if let Some(code) = &state.device_code {
         code.verification_uri.as_str().into()
@@ -655,7 +637,7 @@ pub unsafe extern "C" fn get_url(state: *mut State) -> RefStringWrapper {
     }
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn start_auth_loop(
     state: *mut State,
@@ -674,7 +656,7 @@ pub unsafe extern "C" fn start_auth_loop(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub extern "C" fn poll_auth_loop(
     raw_task: *mut TaskWrapper<Result<AccRefreshPair, Error>>,
@@ -682,9 +664,9 @@ pub extern "C" fn poll_auth_loop(
     poll_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn await_auth_loop(
+pub unsafe fn await_auth_loop(
     state: *const State,
     data: *mut LauncherData,
     raw_task: *mut TaskWrapper<Result<AccRefreshPair, Error>>,
@@ -700,7 +682,7 @@ pub unsafe extern "C" fn await_auth_loop(
 
         data.accounts.push(inner);
         if let Err(e) = std::fs::write(
-            (*state).path.join("launcher_data.toml"),
+            (&*state).path.join("launcher_data.toml"),
             toml::to_string_pretty(&data).unwrap().as_bytes(),
         ) {
             return Error::from(e).into();
@@ -709,7 +691,7 @@ pub unsafe extern "C" fn await_auth_loop(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn cancel_auth_loop(
     raw_task: *mut TaskWrapper<Result<AccRefreshPair, Error>>,
@@ -717,7 +699,7 @@ pub unsafe extern "C" fn cancel_auth_loop(
     cancel_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn try_refresh(
     data: *const LauncherData,
@@ -733,14 +715,14 @@ pub unsafe extern "C" fn try_refresh(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 pub extern "C" fn poll_refresh(
     raw_task: *mut TaskWrapper<Result<(AccRefreshPair, usize), Error>>,
 ) -> bool {
     poll_task(raw_task)
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn await_refresh(
     state: *const State,
@@ -760,28 +742,31 @@ pub unsafe extern "C" fn await_refresh(
     })
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn accounts_len(data: *mut LauncherData) -> usize {
-    (*data).accounts.len()
+pub unsafe fn accounts_len(data: *mut LauncherData) -> usize {
+    (&&*data).accounts.len()
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn remove_account(data: *mut LauncherData, index: usize) {
-    (*data).accounts.remove(index);
+pub unsafe fn remove_account(data: *mut LauncherData, index: usize) {
+    (&mut *data).accounts.remove(index);
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn get_account_name(
-    data: *mut LauncherData,
-    index: usize,
-) -> RefStringWrapper {
-    (*data).accounts[index].account.profile.name.as_str().into()
+pub unsafe fn get_account_name(data: *mut LauncherData, index: usize) -> RefStringWrapper {
+    let data = &*data;
+    let acc = &data.accounts[index];
+    let st = &acc.account.profile.name;
+    RefStringWrapper {
+        char_ptr: st.as_ptr(),
+        len: st.len(),
+    }
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn needs_refresh(data: *mut LauncherData, index: usize) -> bool {
     let data = &*data;
@@ -792,30 +777,26 @@ pub unsafe extern "C" fn needs_refresh(data: *mut LauncherData, index: usize) ->
             .as_secs()
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn jvm_len(data: *mut LauncherData) -> usize {
-    (*data).jvms.len()
+    (&*data).jvms.len()
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn jvm_name(data: *mut LauncherData, index: usize) -> RefStringWrapper {
-    (*data).jvms[index].name.as_str().into()
+    (&*data).jvms[index].name.as_str().into()
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
-pub unsafe extern "C" fn add_jvm(
-    data: *mut LauncherData,
-    ptr: *const u16,
-    len: usize,
-) -> NativeReturn {
+pub unsafe fn add_jvm(data: *mut LauncherData, ptr: *const u16, len: usize) -> NativeReturn {
     assert_eq!(ptr.align_offset(std::mem::align_of::<&[u16]>()), 0);
     let string = String::from_utf16(slice::from_raw_parts(ptr, len)).unwrap();
     match get_vendor_major_version(&string) {
         Ok((vendor, version)) => {
-            (*data).jvms.push(Jvm {
+            (&mut *data).jvms.push(Jvm {
                 path: string,
                 name: format!("{vendor} {version}"),
             });
@@ -825,10 +806,10 @@ pub unsafe extern "C" fn add_jvm(
     }
 }
 
-#[no_mangle]
+#[dotnetfunction]
 /// # Safety
 pub unsafe extern "C" fn remove_jvm(data: *mut LauncherData, index: usize) {
-    (*data).jvms.remove(index);
+    (&mut *data).jvms.remove(index);
 }
 
 pub enum JvmError {
@@ -940,10 +921,8 @@ fn profile_to_account(
     }
 }
 
-#[no_mangle]
-unsafe extern "C" fn read_data(
-    state: *const State,
-) -> *mut TaskWrapper<Result<LauncherData, Error>> {
+#[dotnetfunction]
+pub unsafe fn read_data(state: *const State) -> *mut TaskWrapper<Result<LauncherData, Error>> {
     let state = &*state;
     get_task(async {
         let path = state.path.join("launcher_data.toml");
@@ -967,25 +946,46 @@ unsafe extern "C" fn read_data(
     })
 }
 
-#[no_mangle]
-unsafe extern "C" fn poll_data(raw_task: *mut TaskWrapper<Result<LauncherData, Error>>) -> bool {
+#[dotnetfunction]
+pub unsafe fn alloc_data() -> *mut LauncherData {
+    Box::leak(Box::new(LauncherData::default()))
+}
+
+#[dotnetfunction]
+pub unsafe extern "C" fn poll_data(
+    raw_task: *mut TaskWrapper<Result<LauncherData, Error>>,
+) -> bool {
     poll_task(raw_task)
 }
 
 /// If this is a success, we smuggle the pointer through the error
-#[no_mangle]
-unsafe extern "C" fn await_data(
+#[dotnetfunction]
+pub unsafe fn await_data(
     raw_task: *mut TaskWrapper<Result<LauncherData, Error>>,
+    data: *mut LauncherData,
 ) -> NativeReturn {
-    await_task(raw_task, |inner| match inner {
-        Ok(v) => NativeReturn {
-            code: Code::Success,
-            error: OwnedStringWrapper {
-                char_ptr: Box::into_raw(Box::new(v)) as *mut _,
-                len: 0,
-                capacity: 0,
-            },
-        },
-        Err(e) => e.into(),
+    await_result_task(raw_task, |inner| {
+        let data = &mut *data;
+        *data = inner;
+        NativeReturn::success()
     })
+}
+
+#[repr(C)]
+pub struct RustString {
+    repr: [usize; 3],
+}
+
+impl RustString {
+    fn as_mut_string(&mut self) -> &mut String {
+        unsafe {
+            transmute(self)
+        }
+    }
+}
+
+#[dotnet]
+pub fn new_rust_state(raw_path: String) -> State {
+    let path = PathBuf::from(raw_path).join("synth_launcher");
+    State::new(path)
 }

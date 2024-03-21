@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 pub struct Scope {
     imports: Vec<String>,
     name_space: NameSpace,
@@ -63,7 +65,9 @@ impl ToString for Scope {
             .name_space
             .structs
             .iter()
-            .fold(String::new(), |acc, s| format!("{acc}\n{}", s.to_string()));
+            .fold(String::new(), |acc, s| {
+                format!("{acc}\n{}\n", s.to_string())
+            });
 
         format!("{imports}\n{name_space}{classes}\n{structs}")
     }
@@ -145,6 +149,7 @@ impl Qualifier {
     }
 }
 
+#[derive(PartialEq, Eq)]
 pub enum Type {
     /// Utf-16 character
     Char,
@@ -177,27 +182,62 @@ impl Type {
     }
 }
 
-impl ToString for Type {
-    fn to_string(&self) -> String {
+impl Type {
+    fn to_string(&self) -> Cow<str> {
         match self {
             Type::Char => "char".into(),
             Type::Boolean => "bool".into(),
-            Type::Byte => todo!(),
-            Type::Ushort => todo!(),
-            Type::Uint => todo!(),
-            Type::Ulong => todo!(),
-            Type::Nuint => "nuint".to_string(),
-            Type::Sbyte => todo!(),
-            Type::Short => todo!(),
-            Type::Int => todo!(),
-            Type::Long => todo!(),
-            Type::Nint => todo!(),
+            Type::Byte => "byte".into(),
+            Type::Ushort => "ushort".into(),
+            Type::Uint => "uint".into(),
+            Type::Ulong => "ulong".into(),
+            Type::Nuint => "nuint".into(),
+            Type::Sbyte => "sbyte".into(),
+            Type::Short => "short".into(),
+            Type::Int => "int".into(),
+            Type::Long => "long".into(),
+            Type::Nint => "nint".into(),
             Type::String => "string".into(),
             Type::Void => "void".into(),
-            Type::Verbatim(ty) => ty.to_owned(),
-            Type::FixedBuffer(ty, _) => ty.to_string(),
-            Type::Array(ty) => format!("{}[]", ty.to_string()),
-            Type::Ptr(ty) => format!("{}*", ty.to_string()),
+            Type::Verbatim(ty) => ty.to_owned().into(),
+            Type::FixedBuffer(ty, _) => ty.to_string().into(),
+            Type::Array(ty) => format!("{}[]", ty.to_string()).into(),
+            Type::Ptr(ty) => format!("{}*", ty.to_string()).into(),
+        }
+    }
+}
+
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let st = match self {
+            Type::Char => Some("char"),
+            Type::Boolean => "bool".into(),
+            Type::Byte => "byte".into(),
+            Type::Ushort => "ushort".into(),
+            Type::Uint => "uint".into(),
+            Type::Ulong => "ulong".into(),
+            Type::Nuint => "nuint".into(),
+            Type::Sbyte => "sbyte".into(),
+            Type::Short => "short".into(),
+            Type::Int => "int".into(),
+            Type::Long => "long".into(),
+            Type::Nint => "nint".into(),
+            Type::String => "string".into(),
+            Type::Void => "void".into(),
+            _ => None,
+        };
+        if let Some(st) = &st {
+            f.write_str(st)
+        } else {
+            let st = match self {
+                Type::Verbatim(ty) => ty.to_owned(),
+                Type::FixedBuffer(ty, _) => ty.to_string(),
+                Type::Array(ty) => format!("{}[]", ty.to_string()),
+                Type::Ptr(ty) => format!("{}*", ty.to_string()),
+                _ => unreachable!(),
+            };
+
+            f.write_str(&st)
         }
     }
 }
@@ -301,7 +341,7 @@ impl ToString for Struct {
             )
         });
 
-        format!("struct {} {{{fields}\n}}", self.name)
+        format!("public struct {} {{{fields}\n}}", self.name)
     }
 }
 
@@ -327,8 +367,12 @@ impl Field {
         self
     }
 
-    pub fn qualifier(mut self, qualifier: Qualifier) -> Self {
+    pub fn add_qualifier(&mut self, qualifier: Qualifier) {
         self.qualifiers.push(qualifier);
+    }
+
+    pub fn qualifier(mut self, qualifier: Qualifier) -> Self {
+        self.add_qualifier(qualifier);
         self
     }
 
@@ -351,8 +395,9 @@ impl Method {
         }
     }
 
-    pub fn attr(&mut self, attr: Attr) {
+    pub fn attr(mut self, attr: Attr) -> Self {
         self.attrs.push(attr);
+        self
     }
 
     pub fn vis(mut self, vis: Vis) -> Self {
@@ -364,7 +409,12 @@ impl Method {
         self.ret = ty;
     }
 
-    pub fn qualifier(&mut self, qualifier: Qualifier) {
+    pub fn qualifier(mut self, qualifier: Qualifier) -> Self {
+        self.add_qualifier(qualifier);
+        self
+    }
+
+    pub fn add_qualifier(&mut self, qualifier: Qualifier) {
         self.qualifiers.push(qualifier);
     }
 
@@ -389,14 +439,20 @@ impl Attr {
         Self { name, args: vec![] }
     }
 
-    pub fn arg(&mut self, arg: AttrArg) {
-        self.args.push(arg);
+    pub fn arg(mut self, arg: String) -> Self {
+        self.args.push(AttrArg::Value(arg));
+        self
+    }
+
+    pub fn arg_value(mut self, arg: String, value: String) -> Self {
+        self.args.push(AttrArg::ArgValue(arg, value));
+        self
     }
 }
 
 pub enum AttrArg {
     Value(String),
-    ArgValue((String, String)),
+    ArgValue(String, String),
 }
 
 pub struct Variable {
@@ -509,7 +565,7 @@ impl ToString for Class {
                     .iter()
                     .map(|arg| match arg {
                         AttrArg::Value(v) => v.to_string(),
-                        AttrArg::ArgValue((name, value)) => format!("{name} = {value}"),
+                        AttrArg::ArgValue(name, value) => format!("{name} = {value}"),
                     })
                     .collect();
 
@@ -570,7 +626,7 @@ fn test() {
                     name: "DllImport".into(),
                     args: vec![
                         AttrArg::Value("__DLLName".into()),
-                        AttrArg::ArgValue(("EntryPoint".into(), "\"malloc\"".into())),
+                        AttrArg::ArgValue("EntryPoint".into(), "\"malloc\"".into()),
                     ],
                 }],
                 vis: Some(Vis::Public),
@@ -585,7 +641,7 @@ fn test() {
                     name: "DllImport".into(),
                     args: vec![
                         AttrArg::Value("__DLLName".into()),
-                        AttrArg::ArgValue(("EntryPoint".into(), "\"free\"".into())),
+                        AttrArg::ArgValue("EntryPoint".into(), "\"free\"".into()),
                     ],
                 }],
                 vis: Some(Vis::Public),

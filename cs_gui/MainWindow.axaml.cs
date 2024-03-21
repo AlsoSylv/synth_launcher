@@ -39,8 +39,9 @@ public partial class MainWindow : Window
         Dispatcher.UIThread.InvokeAsync(async () => {
             try {
                 await getData;
+                Console.WriteLine(_handle.AccountLength);
                 for (nuint i = 0; i < _handle.AccountLength; i++) _accounts.Add(_handle.GetAccountName(i));
-                for (nuint i = 0; i < _handle.JvmLen; i++) _jvms.Add(_handle.GetAccountName(i));
+                // for (nuint i = 0; i < _handle.JvmLen; i++) _jvms.Add(_handle.GetAccountName(i));
 
                 try {
                     await task;
